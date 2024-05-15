@@ -39,6 +39,22 @@ def is_redacted(contrib, allowlists):
     )
 
 
+def is_identical(contrib1, contrib2):
+    return (
+        contrib1["contributor_first_name"] == contrib2["contributor_first_name"]
+        and contrib1["contributor_middle_name"] == contrib2["contributor_middle_name"]
+        and contrib1["contributor_last_name"] == contrib2["contributor_last_name"]
+        and contrib1["contributor_suffix"] == contrib2["contributor_suffix"]
+        and contrib1["contributor_name"] == contrib2["contributor_name"]
+        and contrib1["contributor_occupation"] == contrib2["contributor_occupation"]
+        and contrib1["contributor_employer"] == contrib2["contributor_employer"]
+        and round(contrib1["contribution_receipt_amount"], 2)
+        == contrib2["contribution_receipt_amount"]
+        and contrib1["contribution_receipt_date"]
+        == contrib2["contribution_receipt_date"]
+    )
+
+
 def update_committee_contributions(db):
     committee_ids = [committee["id"] for committee in db.committees.values()]
     for committee_id in committee_ids:
@@ -96,6 +112,12 @@ def update_committee_contributions(db):
                         "total": round(contrib["contribution_receipt_amount"], 2),
                     }
                 else:
+                    if any(
+                        is_identical(contrib, c)
+                        for c in donorMap["groups"][group]["contributions"]
+                    ):
+                        # Omit duplicate contributions
+                        continue
                     donorMap["groups"][group]["contributions"].append(
                         pick(contrib, CONTRIBUTION_FIELDS, redacted)
                     )
