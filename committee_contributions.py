@@ -1,6 +1,7 @@
 import logging
 import requests
 from secrets import FEC_API_KEY
+from utils import pick
 
 CONTRIBUTION_FIELDS = [
     "contributor_first_name",
@@ -16,8 +17,8 @@ CONTRIBUTION_FIELDS = [
 ]
 
 
-def pick(d, keys, redacted):
-    res = {k: d[k] for k in keys if k in d}
+def pick_contribution(d, keys, redacted):
+    res = pick(d, keys)
     if redacted:
         for k in CONTRIBUTION_FIELDS[0:5]:
             res[k] = "REDACTED"
@@ -108,7 +109,9 @@ def update_committee_contributions(db):
 
                 if group not in donorMap["groups"]:
                     donorMap["groups"][group] = {
-                        "contributions": [pick(contrib, CONTRIBUTION_FIELDS, redacted)],
+                        "contributions": [
+                            pick_contribution(contrib, CONTRIBUTION_FIELDS, redacted)
+                        ],
                         "total": round(contrib["contribution_receipt_amount"], 2),
                     }
                 else:
@@ -119,10 +122,12 @@ def update_committee_contributions(db):
                         # Omit duplicate contributions
                         continue
                     donorMap["groups"][group]["contributions"].append(
-                        pick(contrib, CONTRIBUTION_FIELDS, redacted)
+                        pick_contribution(contrib, CONTRIBUTION_FIELDS, redacted)
                     )
-                    donorMap["groups"][group]["total"] += round(
-                        contrib["contribution_receipt_amount"], 2
+                    donorMap["groups"][group]["total"] = round(
+                        donorMap["groups"][group]["total"]
+                        + contrib["contribution_receipt_amount"],
+                        2,
                     )
                 donorMap["contributions_count"] += 1
 

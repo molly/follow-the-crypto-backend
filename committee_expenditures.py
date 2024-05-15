@@ -1,0 +1,104 @@
+import logging
+import requests
+from secrets import FEC_API_KEY
+from utils import pick
+
+EXPENDITURE_FIELDS = [
+    "expenditure_amount",
+    "candidate_office_state",
+    "expenditure_date",
+    "expenditure_description",
+    "candidate_first_name",
+    "candidate_last_name",
+    "candidate_middle_name",
+    "candidate_suffix",
+    "candidate_name",
+    "candidate_office",
+    "candidate_office_district",
+    "candidate_party",
+    "category_code",
+    "category_code_full",
+    "payee_name",
+    "support_oppose_indicator",
+]
+
+
+def update_committee_expenditures(db):
+    committee_ids = [committee["id"] for committee in db.committees.values()]
+    states = {}
+
+    last_index = None
+    last_expenditure_date = None
+    exp_count = 0
+    for committee_id in committee_ids:
+        while True:
+            try:
+                r = requests.get(
+                    "https://api.open.fec.gov/v1/schedules/schedule_e",
+                    params={
+                        "api_key": FEC_API_KEY,
+                        "committee_id": committee_id,
+                        "per_page": 100,
+                        "last_index": last_index,
+                        "last_expenditure_date": last_expenditure_date,
+                    },
+                    timeout=30,
+                )
+                r.raise_for_status()
+            except (
+                requests.exceptions.RequestException,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.HTTPError,
+                requests.exceptions.Timeout,
+            ) as e:
+                logging.error(f"Failed to fetch committee expenditures: {e}")
+                return
+
+            data = r.json()
+            exp_count += data["pagination"]["per_page"]
+
+            for exp in data["results"]:
+                amount = round(exp["expenditure_amount"], 2)
+                if exp["candidate_office_state"] not in states:
+                    states[exp["candidate_office_state"]] = {
+                        "total": amount,
+                        "by_committee": {},
+                    }
+                else:
+                    states[exp["candidate_office_state"]]["total"] = round(
+                        states[exp["candidate_office_state"]]["total"] + amount, 2
+                    )
+
+                if (
+                    committee_id
+                    not in states[exp["candidate_office_state"]]["by_committee"]
+                ):
+                    states[exp["candidate_office_state"]]["by_committee"][
+                        committee_id
+                    ] = {
+                        "total": amount,
+                        "expenditures": [pick(exp, EXPENDITURE_FIELDS)],
+                    }
+                else:
+                    states[exp["candidate_office_state"]]["by_committee"][committee_id][
+                        "total"
+                    ] = round(
+                        states[exp["candidate_office_state"]]["by_committee"][
+                            committee_id
+                        ]["total"]
+                        + amount,
+                        2,
+                    )
+                    states[exp["candidate_office_state"]]["by_committee"][committee_id][
+                        "expenditures"
+                    ].append(pick(exp, EXPENDITURE_FIELDS))
+
+            if exp_count >= data["pagination"]["count"]:
+                break
+            else:
+                last_index = data["pagination"]["last_indexes"]["last_index"]
+                last_expenditure_date = data["pagination"]["last_indexes"][
+                    "last_expenditure_date"
+                ]
+
+    db.client.collection("expenditures").document("states").set(states)
