@@ -59,10 +59,17 @@ def update_committee_expenditures(db):
 
             for exp in data["results"]:
                 amount = round(exp["expenditure_amount"], 2)
+                race = "{candidate_office_state}-{candidate_office}".format(
+                    **exp
+                )
+                if exp["candidate_office_district"] and int(exp["candidate_office_district"]) != 0:
+                    race += "-" + exp["candidate_office_district"]
+
                 if exp["candidate_office_state"] not in states:
                     states[exp["candidate_office_state"]] = {
                         "total": amount,
                         "by_committee": {},
+                        "by_race": {}
                     }
                 else:
                     states[exp["candidate_office_state"]]["total"] = round(
@@ -92,6 +99,19 @@ def update_committee_expenditures(db):
                     states[exp["candidate_office_state"]]["by_committee"][committee_id][
                         "expenditures"
                     ].append(pick(exp, EXPENDITURE_FIELDS))
+
+                if race not in states[exp["candidate_office_state"]]["by_race"]:
+                    states[exp["candidate_office_state"]]["by_race"][race] = {
+                        "total": amount,
+                        "details": {
+                            "candidate_office": exp["candidate_office"],
+                            "candidate_office_district": exp["candidate_office_district"],
+                        },
+                        "expenditures": [pick(exp, EXPENDITURE_FIELDS)],
+                    }
+                else:
+                    states[exp["candidate_office_state"]]["by_race"][race]["total"] = round(states[exp["candidate_office_state"]]["by_race"][race]["total"] + amount, 2)
+                    states[exp["candidate_office_state"]]["by_race"][race]["expenditures"].append(pick(exp, EXPENDITURE_FIELDS))
 
             if exp_count >= data["pagination"]["count"]:
                 break
