@@ -1,6 +1,6 @@
 import logging
 import requests
-from secrets import FEC_API_KEY
+from config import fec_data_config
 from utils import pick
 
 EXPENDITURE_FIELDS = [
@@ -36,7 +36,7 @@ def update_committee_expenditures(db):
                 r = requests.get(
                     "https://api.open.fec.gov/v1/schedules/schedule_e",
                     params={
-                        "api_key": FEC_API_KEY,
+                        "api_key": fec_data_config.api_key,
                         "committee_id": committee_id,
                         "per_page": 100,
                         "last_index": last_index,
