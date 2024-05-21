@@ -1,7 +1,8 @@
-from states import STATES_BY_ABBR
 import logging
 import requests
-from secrets import FEC_API_KEY
+
+from config import fec_data_config
+from states import STATES_BY_ABBR
 
 
 def update_race_details(db):
@@ -31,7 +32,7 @@ def update_race_details(db):
             race_data[race_parts[0]][election_name] = {"candidates": [], "dates": []}
 
         candidate_params = {
-            "api_key": FEC_API_KEY,
+            "api_key": fec_data_config.api_key,
             "cycle": 2024,
             "state": race_parts[0],
             "sort": "-total_receipts",
@@ -66,7 +67,7 @@ def update_race_details(db):
             race_data[race_parts[0]][election_name]["candidates"] = data_to_include
 
         dates_params = {
-            "api_key": FEC_API_KEY,
+            "api_key": fec_data_config.api_key,
             "election_state": race_parts[0],
             "election_year": 2024,
             "office_sought": race_parts[1],

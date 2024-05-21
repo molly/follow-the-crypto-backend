@@ -1,6 +1,6 @@
 import logging
 import requests
-from secrets import FEC_API_KEY
+from config import fec_data_config
 from utils import pick
 
 CONTRIBUTION_FIELDS = [
@@ -70,7 +70,7 @@ def update_committee_contributions(db):
                 r = requests.get(
                     "https://api.open.fec.gov/v1/schedules/schedule_a",
                     params={
-                        "api_key": FEC_API_KEY,
+                        "api_key": fec_data_config,
                         "committee_id": committee_id,
                         "per_page": 100,
                         "sort": "-contribution_receipt_amount",
