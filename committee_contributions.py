@@ -1,7 +1,7 @@
 import logging
 import requests
 from secrets import FEC_API_KEY
-from utils import pick
+from utils import FEC_fetch, pick
 
 CONTRIBUTION_FIELDS = [
     "contributor_first_name",
@@ -34,10 +34,9 @@ def is_redacted(contrib, allowlists):
     if not contrib["contributor_occupation"]:
         # Redact if the contributor is missing, just in case
         return True
-    return not contrib["contributor_occupation"] in allowlists["equals"] and not any(
-        substring in contrib["contributor_occupation"]
-        for substring in allowlists["contains"]
-    )
+    return not contrib["contributor_occupation"] in allowlists[
+        "equals"
+    ] and not allowlists["contains"].search(contrib["contributor_occupation"])
 
 
 def is_identical(contrib1, contrib2):
@@ -66,30 +65,21 @@ def update_committee_contributions(db):
         contribs_count = 0
         redacted_count = 0
         while True:
-            try:
-                r = requests.get(
-                    "https://api.open.fec.gov/v1/schedules/schedule_a",
-                    params={
-                        "api_key": FEC_API_KEY,
-                        "committee_id": committee_id,
-                        "per_page": 100,
-                        "sort": "-contribution_receipt_amount",
-                        "last_index": last_index,
-                        "last_contribution_receipt_amount": last_contribution_receipt_amount,
-                    },
-                    timeout=30,
-                )
-                r.raise_for_status()
-            except (
-                requests.exceptions.RequestException,
-                requests.exceptions.ConnectionError,
-                requests.exceptions.HTTPError,
-                requests.exceptions.Timeout,
-            ) as e:
-                logging.error(f"Failed to fetch committee contributions: {e}")
-                return
+            data = FEC_fetch(
+                "committee contributions",
+                "https://api.open.fec.gov/v1/schedules/schedule_a",
+                params={
+                    "committee_id": committee_id,
+                    "per_page": 100,
+                    "sort": "-contribution_receipt_amount",
+                    "last_index": last_index,
+                    "last_contribution_receipt_amount": last_contribution_receipt_amount,
+                },
+            )
 
-            data = r.json()
+            if not data:
+                continue
+
             contribs_count += data["pagination"]["per_page"]
 
             for contrib in data["results"]:
@@ -115,12 +105,12 @@ def update_committee_contributions(db):
                         "total": round(contrib["contribution_receipt_amount"], 2),
                     }
                 else:
-                    if any(
-                        is_identical(contrib, c)
-                        for c in donorMap["groups"][group]["contributions"]
-                    ):
-                        # Omit duplicate contributions
-                        continue
+                    # if any(
+                    #     is_identical(contrib, c)
+                    #     for c in donorMap["groups"][group]["contributions"]
+                    # ):
+                    #     Omit duplicate contributions
+                    #     continue
                     donorMap["groups"][group]["contributions"].append(
                         pick_contribution(contrib, CONTRIBUTION_FIELDS, redacted)
                     )

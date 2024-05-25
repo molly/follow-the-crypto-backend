@@ -1,5 +1,6 @@
 import firebase_admin
 from firebase_admin import credentials, firestore
+import re
 
 
 class Database:
@@ -25,7 +26,8 @@ class Database:
         self.occupation_allowlist = (
             constants.document("occupationAllowlist").get().to_dict()
         )
-        self.occupation_allowlist["contains"] = set(
-            self.occupation_allowlist["contains"]
+        self.occupation_allowlist["contains"] = re.compile(
+            "({})".format("|".join(self.occupation_allowlist["contains"])),
+            re.IGNORECASE,
         )
         self.occupation_allowlist["equals"] = set(self.occupation_allowlist["equals"])

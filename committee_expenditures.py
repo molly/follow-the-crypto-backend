@@ -1,7 +1,7 @@
 import logging
 import requests
 from secrets import FEC_API_KEY
-from utils import pick
+from utils import FEC_fetch, pick
 
 EXPENDITURE_FIELDS = [
     "expenditure_amount",
@@ -32,44 +32,36 @@ def update_committee_expenditures(db):
     exp_count = 0
     for committee_id in committee_ids:
         while True:
-            try:
-                r = requests.get(
-                    "https://api.open.fec.gov/v1/schedules/schedule_e",
-                    params={
-                        "api_key": FEC_API_KEY,
-                        "committee_id": committee_id,
-                        "per_page": 100,
-                        "last_index": last_index,
-                        "last_expenditure_date": last_expenditure_date,
-                    },
-                    timeout=30,
-                )
-                r.raise_for_status()
-            except (
-                requests.exceptions.RequestException,
-                requests.exceptions.ConnectionError,
-                requests.exceptions.HTTPError,
-                requests.exceptions.Timeout,
-            ) as e:
-                logging.error(f"Failed to fetch committee expenditures: {e}")
-                return
+            data = FEC_fetch(
+                "committee expenditures",
+                "https://api.open.fec.gov/v1/schedules/schedule_e",
+                params={
+                    "committee_id": committee_id,
+                    "per_page": 100,
+                    "last_index": last_index,
+                    "last_expenditure_date": last_expenditure_date,
+                },
+            )
 
-            data = r.json()
+            if not data:
+                continue
+
             exp_count += data["pagination"]["per_page"]
 
             for exp in data["results"]:
                 amount = round(exp["expenditure_amount"], 2)
-                race = "{candidate_office_state}-{candidate_office}".format(
-                    **exp
-                )
-                if exp["candidate_office_district"] and int(exp["candidate_office_district"]) != 0:
+                race = "{candidate_office_state}-{candidate_office}".format(**exp)
+                if (
+                    exp["candidate_office_district"]
+                    and int(exp["candidate_office_district"]) != 0
+                ):
                     race += "-" + exp["candidate_office_district"]
 
                 if exp["candidate_office_state"] not in states:
                     states[exp["candidate_office_state"]] = {
                         "total": amount,
                         "by_committee": {},
-                        "by_race": {}
+                        "by_race": {},
                     }
                 else:
                     states[exp["candidate_office_state"]]["total"] = round(
@@ -105,13 +97,23 @@ def update_committee_expenditures(db):
                         "total": amount,
                         "details": {
                             "candidate_office": exp["candidate_office"],
-                            "candidate_office_district": exp["candidate_office_district"],
+                            "candidate_office_district": exp[
+                                "candidate_office_district"
+                            ],
                         },
                         "expenditures": [pick(exp, EXPENDITURE_FIELDS)],
                     }
                 else:
-                    states[exp["candidate_office_state"]]["by_race"][race]["total"] = round(states[exp["candidate_office_state"]]["by_race"][race]["total"] + amount, 2)
-                    states[exp["candidate_office_state"]]["by_race"][race]["expenditures"].append(pick(exp, EXPENDITURE_FIELDS))
+                    states[exp["candidate_office_state"]]["by_race"][race][
+                        "total"
+                    ] = round(
+                        states[exp["candidate_office_state"]]["by_race"][race]["total"]
+                        + amount,
+                        2,
+                    )
+                    states[exp["candidate_office_state"]]["by_race"][race][
+                        "expenditures"
+                    ].append(pick(exp, EXPENDITURE_FIELDS))
 
             if exp_count >= data["pagination"]["count"]:
                 break
@@ -121,4 +123,7 @@ def update_committee_expenditures(db):
                     "last_expenditure_date"
                 ]
 
-    db.client.collection("expenditures").document("states").set(states)
+    for state, state_expenditures in states.items():
+        db.client.collection("expendituresByState").document(state).set(
+            state_expenditures
+        )
