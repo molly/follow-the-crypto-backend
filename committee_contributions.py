@@ -1,6 +1,3 @@
-import logging
-import requests
-from secrets import FEC_API_KEY
 import re
 from utils import FEC_fetch, pick
 

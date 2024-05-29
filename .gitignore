@@ -160,3 +160,4 @@ cython_debug/
 .idea/
 service.json
 secrets.py
+races.py
