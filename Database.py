@@ -12,6 +12,7 @@ class Database:
         self.company_aliases = None
         self.individual_employers = None
         self.occupation_allowlist = None
+        self.duplicate_contributions = None
 
     def get_constants(self):
         constants = self.client.collection("constants")
@@ -31,3 +32,6 @@ class Database:
             re.IGNORECASE,
         )
         self.occupation_allowlist["equals"] = set(self.occupation_allowlist["equals"])
+        self.duplicate_contributions = (
+            constants.document("duplicateContributions").get().to_dict()
+        )

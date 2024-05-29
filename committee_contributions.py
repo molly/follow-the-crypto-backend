@@ -1,6 +1,7 @@
 import logging
 import requests
 from secrets import FEC_API_KEY
+import re
 from utils import FEC_fetch, pick
 
 SHARED_CONTRIBUTION_FIELDS = [
@@ -57,19 +58,34 @@ def is_redacted(contrib, allowlists):
     ] and not allowlists["contains"].search(contrib["contributor_occupation"])
 
 
-def should_omit(contrib, other_contribs):
+def should_omit(contrib, other_contribs, ids_to_omit):
     """Omit any duplicate contributions, refunds, etc."""
-    if (
-        contrib["transaction_id"] and len(contrib["transaction_id"].split(".")) > 2
-    ) or contrib["transaction_id"] in other_contribs:
-        # Duplicate.
-        # There are sometimes 2+ transactions with IDs like SA17.4457 and SA17.4457.0, in which case we omit the latter.
-        # These are typically instances in which the committee has reported the dollar equivalent and the in-kind
-        # contribution separately for the same contribution.
+    if contrib["transaction_id"] in ids_to_omit:
+        return True
+    if contrib["transaction_id"] in other_contribs:
+        # Duplicate of a transaction we've already encountered
         return True
     if contrib["receipt_type_full"] and "REFUND" in contrib["receipt_type_full"]:
         return True
+    if contrib["memo_text"] and "ATTRIBUTION" in contrib["memo_text"]:
+        return True
     return False
+
+
+def get_ids_to_omit(contribs):
+    """Dedupe contributions, refunds, etc."""
+    to_omit = set()
+    transaction_ids = set([x["transaction_id"] for x in contribs])
+    for t_id in transaction_ids:
+        # There are sometimes 2+ transactions with IDs like SA17.4457 and SA17.4457.0, in which case we omit the former.
+        # These are typically instances in which the committee has reported the dollar equivalent and the in-kind
+        # contribution separately for the same contribution, or where a transaction from multiple people has been
+        # reported as a group and then individually.
+        m = re.match(r"^(.*?)\.\d+$", t_id)
+        if m:
+            if m.group(1) in transaction_ids:
+                to_omit.add(m.group(1))
+    return to_omit
 
 
 def update_committee_contributions(db):
@@ -101,8 +117,16 @@ def update_committee_contributions(db):
 
             contribs_count += data["pagination"]["per_page"]
 
-            for contrib in data["results"]:
-                if should_omit(contrib, contrib_ids):
+            results = data["results"]
+            ids_to_omit = (
+                set(db.duplicate_contributions[committee_id])
+                if committee_id in db.duplicate_contributions
+                else set()
+            )
+            ids_to_omit = ids_to_omit.union(get_ids_to_omit(results))
+            # TODO Edge case with duplicates that exist across pages
+            for contrib in results:
+                if should_omit(contrib, contrib_ids, ids_to_omit):
                     continue
                 contrib_ids.add(contrib["transaction_id"])
 
