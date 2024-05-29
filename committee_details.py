@@ -34,24 +34,26 @@ def hydrate_committees(db):
             picked["fec_name"] = details["name"]
             committee_data = {**committee, **picked}
 
-        totals_data = FEC_fetch(
-            "committee totals",
-            "https://api.open.fec.gov/v1/committee/{}/totals".format(committee["id"]),
-            params={"cycle": 2024},
-        )
-        if totals_data and "results" in totals_data and totals_data["results"][0]:
-            totals = totals_data["results"][0]
-            committee_data.update(
-                **pick(
-                    totals,
-                    [
-                        "contributions",
-                        "contribution_refunds",
-                        "net_contributions",
-                        "receipts",
-                        "independent_expenditures",
-                    ],
+            totals_data = FEC_fetch(
+                "committee totals",
+                "https://api.open.fec.gov/v1/committee/{}/totals".format(
+                    committee["id"]
                 ),
+                params={"cycle": 2024},
             )
+            if totals_data and "results" in totals_data and totals_data["results"][0]:
+                totals = totals_data["results"][0]
+                committee_data.update(
+                    **pick(
+                        totals,
+                        [
+                            "contributions",
+                            "contribution_refunds",
+                            "net_contributions",
+                            "receipts",
+                            "independent_expenditures",
+                        ],
+                    ),
+                )
 
         db.client.collection("committees").document(committee["id"]).set(committee_data)
