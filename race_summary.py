@@ -55,6 +55,21 @@ def get_last_index_with_donation(sorted_candidates, candidates_data):
     return -1
 
 
+def get_expenditure_race_type(expenditure):
+    election_type = expenditure.get("election_type", "")[0]
+    if election_type == "G":
+        return "general"
+    if election_type == "P":
+        return "primary"
+    if election_type == "R":
+        return "primary_runoff"
+    if election_type == "C":
+        return "convention"
+    if election_type == "S":
+        return "special"
+    return None
+
+
 def summarize_races(db):
     race_docs = db.client.collection("raceDetails").stream()
     for doc in race_docs:
@@ -77,11 +92,27 @@ def summarize_races(db):
                     "support_total": 0,
                     "oppose_total": 0,
                     "races": [],
-                    "defeated": True,
                     "defeated_race": None,
                 }
                 for candidate in candidates
             }
+            if "withdrew" in race_data:
+                withdrawn_candidates = {
+                    candidate for candidate in race_data["withdrew"].keys()
+                }
+                candidates = candidates.union(withdrawn_candidates)
+                for candidate in withdrawn_candidates:
+                    candidates_data[candidate] = {
+                        "common_name": candidate,
+                        "withdrew": True,
+                        "support_total": 0,
+                        "oppose_total": 0,
+                        "races": [],
+                    }
+                    if "party" in race_data["withdrew"][candidate]:
+                        candidates_data[candidate]["party"] = race_data["withdrew"][
+                            candidate
+                        ]["party"]
 
             # Get candidate data from FEC
             params = {
@@ -139,16 +170,18 @@ def summarize_races(db):
             for ind, race in enumerate(race_data["races"]):
                 for candidate in race["candidates"]:
                     candidates_data[candidate["name"]]["races"].append(race["type"])
-                    if ind == 0:
+                    if ind == 0 or ("won" in candidate and candidate["won"] is True):
                         candidates_data[candidate["name"]]["defeated"] = False
                     elif (
-                        candidates_data[candidate["name"]]["defeated_race"] is None
-                        and not ("won" in candidate)
-                        or not candidate["won"]
+                        "won" in candidate
+                        and candidate["won"] is False
+                        and "defeated" not in candidates_data[candidate["name"]]
                     ):
-                        candidates_data[candidate["name"]]["defeated_race"] = race[
-                            "type"
-                        ]
+                        candidates_data[candidate["name"]]["defeated"] = True
+                        if candidates_data[candidate["name"]]["defeated_race"] is None:
+                            candidates_data[candidate["name"]]["defeated_race"] = race[
+                                "type"
+                            ]
                     if "withdrew" in candidate and candidate["withdrew"]:
                         candidates_data[candidate["name"]]["withdrew"] = True
 
@@ -175,6 +208,16 @@ def summarize_races(db):
                     else:
                         candidate_key = names[k]
 
+                if "expenditure_races" not in candidates_data[candidate_key]:
+                    candidates_data[candidate_key]["expenditure_races"] = set()
+                if "expenditure_committees" not in candidates_data[candidate_key]:
+                    candidates_data[candidate_key]["expenditure_committees"] = set()
+                candidates_data[candidate_key]["expenditure_races"].add(
+                    get_expenditure_race_type(expenditure)
+                )
+                candidates_data[candidate_key]["expenditure_committees"].add(
+                    expenditure["committee_id"]
+                )
                 if expenditure["support_oppose_indicator"] == "S":
                     candidates_data[candidate_key]["support_total"] = round(
                         candidates_data[candidate_key]["support_total"]
@@ -188,6 +231,18 @@ def summarize_races(db):
                         2,
                     )
 
+            # There can be a lot of withdrawn candidates, so remove those who weren't involved in any expenditures
+            withdrawn_candidates = (
+                list(race_data["withdrew"].keys()) if "withdrew" in race_data else []
+            )
+            for candidate in withdrawn_candidates:
+                if (
+                    candidates_data[candidate]["support_total"] == 0
+                    and candidates_data[candidate]["oppose_total"] == 0
+                ):
+                    del candidates_data[candidate]
+                    del race_data["withdrew"][candidate]
+
             sorted_candidates = sort_candidates(candidates_data)
             last_index_with_donation = get_last_index_with_donation(
                 sorted_candidates, candidates_data
@@ -195,9 +250,12 @@ def summarize_races(db):
             if last_index_with_donation > -1:
                 sorted_candidates = sorted_candidates[: last_index_with_donation + 1]
 
-            db.client.collection("raceDetails").document(state).update(
-                {
-                    db.client.field_path(race_id, "candidates"): candidates_data,
-                    db.client.field_path(race_id, "candidatesOrder"): sorted_candidates,
-                }
-            )
+            updated_data = {
+                db.client.field_path(race_id, "candidates"): candidates_data,
+                db.client.field_path(race_id, "candidatesOrder"): sorted_candidates,
+            }
+            if "withdrew" in race_data:
+                updated_data[db.client.field_path(race_id, "withdrew")] = race_data[
+                    "withdrew"
+                ]
+            db.client.collection("raceDetails").document(state).update(updated_data)
