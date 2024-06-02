@@ -57,12 +57,13 @@ def is_redacted(contrib, allowlists):
 
 def should_omit(contrib, other_contribs, ids_to_omit):
     """Omit any duplicate contributions, refunds, etc."""
+    if contrib["line_number"] in ["15", "16", "17"]:
+        return True
     if contrib["transaction_id"] in ids_to_omit:
+        # Manually excluded transaction, or a parent of a more granularly reported transaction
         return True
     if contrib["transaction_id"] in other_contribs:
         # Duplicate of a transaction we've already encountered
-        return True
-    if contrib["receipt_type_full"] and "REFUND" in contrib["receipt_type_full"]:
         return True
     if contrib["memo_text"] and "ATTRIBUTION" in contrib["memo_text"]:
         return True
@@ -78,7 +79,7 @@ def get_ids_to_omit(contribs):
         # These are typically instances in which the committee has reported the dollar equivalent and the in-kind
         # contribution separately for the same contribution, or where a transaction from multiple people has been
         # reported as a group and then individually.
-        m = re.match(r"^(.*?)\.\d+$", t_id)
+        m = re.match(r"^(.*?)\.\d$", t_id)
         if m:
             if m.group(1) in transaction_ids:
                 to_omit.add(m.group(1))
@@ -88,13 +89,23 @@ def get_ids_to_omit(contribs):
 def update_committee_contributions(db):
     committee_ids = [committee["id"] for committee in db.committees.values()]
     for committee_id in committee_ids:
-        donorMap = {"contributions_count": 0, "groups": {}}
+        donorMap = {
+            "contributions_count": 0,
+            "groups": {},
+            "total_contributed": 0,
+            "total_transferred": 0,
+        }
 
         last_index = None
         last_contribution_receipt_amount = None
         contribs_count = 0
         redacted_count = 0
         contrib_ids = set()
+        ids_to_omit = (
+            set(db.duplicate_contributions[committee_id])
+            if committee_id in db.duplicate_contributions
+            else set()
+        )
         while True:
             data = FEC_fetch(
                 "committee contributions",
@@ -115,18 +126,13 @@ def update_committee_contributions(db):
             contribs_count += data["pagination"]["per_page"]
 
             results = data["results"]
-            ids_to_omit = (
-                set(db.duplicate_contributions[committee_id])
-                if committee_id in db.duplicate_contributions
-                else set()
-            )
             ids_to_omit = ids_to_omit.union(get_ids_to_omit(results))
             # TODO Edge case with duplicates that exist across pages
             for contrib in results:
                 if should_omit(contrib, contrib_ids, ids_to_omit):
                     continue
-                contrib_ids.add(contrib["transaction_id"])
 
+                contrib_ids.add(contrib["transaction_id"])
                 redacted = is_redacted(contrib, db.occupation_allowlist)
 
                 # Get group name
@@ -155,6 +161,20 @@ def update_committee_contributions(db):
                         "rollup": {},
                         "total": 0,
                     }
+
+                if contrib["line_number"] == "12" or contrib["line_number"] == "11c":
+                    # This was a transfer from another committee and shouldn't be double counted
+                    donorMap["total_transferred"] = round(
+                        donorMap["total_transferred"]
+                        + contrib["contribution_receipt_amount"],
+                        2,
+                    )
+                else:
+                    donorMap["total_contributed"] = round(
+                        donorMap["total_contributed"]
+                        + contrib["contribution_receipt_amount"],
+                        2,
+                    )
 
                 if details["contribution_receipt_amount"] >= ROLLUP_THRESHOLD:
                     # Record the individual contribution if it's large

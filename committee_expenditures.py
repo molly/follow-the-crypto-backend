@@ -8,16 +8,19 @@ EXPENDITURE_FIELDS = [
     "candidate_office_state",
     "expenditure_date",
     "expenditure_description",
+    "candidate_id",
     "candidate_first_name",
     "candidate_last_name",
     "candidate_middle_name",
     "candidate_suffix",
     "candidate_name",
     "candidate_office",
+    "candidate_office_state",
     "candidate_office_district",
     "candidate_party",
     "category_code",
     "category_code_full",
+    "election_type",
     "payee_name",
     "support_oppose_indicator",
 ]
@@ -76,7 +79,12 @@ def update_committee_expenditures(db):
                         committee_id
                     ] = {
                         "total": amount,
-                        "expenditures": [pick(exp, EXPENDITURE_FIELDS)],
+                        "expenditures": [
+                            {
+                                **pick(exp, EXPENDITURE_FIELDS),
+                                "committee_id": committee_id,
+                            }
+                        ],
                     }
                 else:
                     states[exp["candidate_office_state"]]["by_committee"][committee_id][
@@ -90,7 +98,12 @@ def update_committee_expenditures(db):
                     )
                     states[exp["candidate_office_state"]]["by_committee"][committee_id][
                         "expenditures"
-                    ].append(pick(exp, EXPENDITURE_FIELDS))
+                    ].append(
+                        {
+                            **pick(exp, EXPENDITURE_FIELDS),
+                            "committee_id": committee_id,
+                        }
+                    )
 
                 if race not in states[exp["candidate_office_state"]]["by_race"]:
                     states[exp["candidate_office_state"]]["by_race"][race] = {
@@ -101,7 +114,12 @@ def update_committee_expenditures(db):
                                 "candidate_office_district"
                             ],
                         },
-                        "expenditures": [pick(exp, EXPENDITURE_FIELDS)],
+                        "expenditures": [
+                            {
+                                **pick(exp, EXPENDITURE_FIELDS),
+                                "committee_id": committee_id,
+                            }
+                        ],
                     }
                 else:
                     states[exp["candidate_office_state"]]["by_race"][race][
@@ -113,7 +131,12 @@ def update_committee_expenditures(db):
                     )
                     states[exp["candidate_office_state"]]["by_race"][race][
                         "expenditures"
-                    ].append(pick(exp, EXPENDITURE_FIELDS))
+                    ].append(
+                        {
+                            **pick(exp, EXPENDITURE_FIELDS),
+                            "committee_id": committee_id,
+                        }
+                    )
 
             if exp_count >= data["pagination"]["count"]:
                 break

@@ -25,5 +25,6 @@ def FEC_fetch(description, url, params={}):
         requests.exceptions.Timeout,
     ) as e:
         logging.error(f"Failed to fetch {description}: {e}")
+        print(e)
         return
     return r.json()
