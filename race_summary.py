@@ -170,7 +170,11 @@ def summarize_races(db):
             for ind, race in enumerate(race_data["races"]):
                 for candidate in race["candidates"]:
                     candidates_data[candidate["name"]]["races"].append(race["type"])
-                    if ind == 0 or ("won" in candidate and candidate["won"] is True):
+                    if ind == 0 or (
+                        "won" in candidate
+                        and candidate["won"] is True
+                        and "defeated" not in candidates_data[candidate["name"]]
+                    ):
                         candidates_data[candidate["name"]]["defeated"] = False
                     elif (
                         "won" in candidate

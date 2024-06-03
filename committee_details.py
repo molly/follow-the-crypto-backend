@@ -2,6 +2,7 @@ from utils import FEC_fetch, pick
 
 
 def hydrate_committees(db):
+    combined_committee_totals = {"receipts": 0, "expenditures": 0, "disbursements": 0}
     for committee in db.committees.values():
         details_data = FEC_fetch(
             "committee details",
@@ -49,11 +50,18 @@ def hydrate_committees(db):
                         [
                             "contributions",
                             "contribution_refunds",
+                            "disbursements",
                             "net_contributions",
                             "receipts",
                             "independent_expenditures",
                         ],
                     ),
                 )
+                combined_committee_totals["receipts"] += totals["receipts"]
+                combined_committee_totals["expenditures"] += totals[
+                    "independent_expenditures"
+                ]
+                combined_committee_totals["disbursements"] += totals["disbursements"]
 
         db.client.collection("committees").document(committee["id"]).set(committee_data)
+    db.client.collection("totals").document("committees").set(combined_committee_totals)
