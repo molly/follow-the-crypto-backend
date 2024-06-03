@@ -146,7 +146,10 @@ def update_committee_expenditures(db):
                     "last_expenditure_date"
                 ]
 
+    races = {}
     for state, state_expenditures in states.items():
+        for race, race_data in state_expenditures["by_race"].items():
+            races[race] = race_data
         db.client.collection("expendituresByState").document(state).set(
             state_expenditures
         )

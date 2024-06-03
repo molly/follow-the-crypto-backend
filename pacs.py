@@ -23,7 +23,7 @@ def get_pac_data(pac, db):
 
 
 def get_top_raised_by_type(db, committee_type=None):
-    params = {"cycle": 2024, "sort": "-receipts", "per_page": 20}
+    params = {"cycle": 2024, "sort": "-receipts", "per_page": 50}
     if committee_type:
         params["committee_type"] = committee_type
     top_raised_data = FEC_fetch(
