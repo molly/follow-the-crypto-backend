@@ -17,13 +17,13 @@ def main():
 
     db = Database()
     db.get_constants()
-    # hydrate_committees(db)
+    hydrate_committees(db)
     # update_committee_contributions(db)
     # update_committee_expenditures(db)
     # update_race_details(db)
     # summarize_races(db)
-    # get_top_raised_pacs(db)
-    # update_candidates_expenditures(db)
+    get_top_raised_pacs(db)
+    update_candidates_expenditures(db)
     get_ads(db)
 
 

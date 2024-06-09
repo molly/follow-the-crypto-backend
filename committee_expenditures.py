@@ -1,6 +1,6 @@
 import logging
 import requests
-from secrets import FEC_API_KEY
+from msecrets import FEC_API_KEY
 from utils import FEC_fetch, pick
 
 EXPENDITURE_FIELDS = [

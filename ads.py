@@ -53,5 +53,8 @@ def get_ads(db):
             if isinstance(value, datetime.date):
                 value = value.isoformat()
             ad_details[field] = value
+        if ad_id in db.ads:
+            ad_details.update(db.ads[ad_id])
+        ad_details["fec_id"] = gatc_to_fec[gatc_id]
         ads_by_committee[gatc_to_fec[gatc_id]]["ads"][ad_id] = ad_details
     db.client.collection("ads").document("google").set(ads_by_committee)

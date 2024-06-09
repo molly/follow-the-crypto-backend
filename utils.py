@@ -1,6 +1,7 @@
 import logging
+import re
 import requests
-from secrets import FEC_API_KEY
+from msecrets import FEC_API_KEY
 
 
 def pick(d, keys):
@@ -28,3 +29,12 @@ def FEC_fetch(description, url, params={}):
         print(e)
         return
     return r.json()
+
+
+def get_first_last_name(common_name):
+    name_parts = common_name.split(" ")
+    first_name = name_parts[0]
+    last_name = name_parts[-1]
+    if re.match("^([IVX]+|[SJ]r.?)$", last_name):
+        last_name = name_parts[-2]
+    return first_name, last_name

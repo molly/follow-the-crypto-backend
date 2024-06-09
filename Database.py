@@ -14,6 +14,7 @@ class Database:
         self.occupation_allowlist = None
         self.duplicate_contributions = None
         self.all_committees = None
+        self.ads = None
 
     def get_constants(self):
         constants = self.client.collection("constants")
@@ -37,3 +38,4 @@ class Database:
             constants.document("duplicateContributions").get().to_dict()
         )
         self.all_committees = constants.document("allCommittees").get().to_dict()
+        self.ads = constants.document("ads").get().to_dict()
