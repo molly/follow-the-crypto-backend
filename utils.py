@@ -25,6 +25,7 @@ def FEC_fetch(description, url, params={}):
         requests.exceptions.HTTPError,
         requests.exceptions.Timeout,
     ) as e:
+        print(f"Failed to fetch {description}: {e}")
         logging.error(f"Failed to fetch {description}: {e}")
         print(e)
         return

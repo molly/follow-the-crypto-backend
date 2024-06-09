@@ -1,7 +1,9 @@
+from datetime import date
 import logging
 import re
 from utils import FEC_fetch
 from states import SINGLE_MEMBER_STATES
+from unidecode import unidecode
 
 RACE_PRIORITY = {
     "general": 0,
@@ -10,6 +12,13 @@ RACE_PRIORITY = {
     "convention": 3,
     None: 4,
 }
+
+
+def compare_names(name_portion, name):
+    upper_name = unidecode(name).upper()
+    if name_portion.upper() in upper_name:
+        return True
+    return False
 
 
 def trim_name(name):
@@ -45,13 +54,16 @@ def sort_candidates(candidates):
 def get_last_index_with_donation(sorted_candidates, candidates_data):
     for i in range(len(sorted_candidates) - 1, -1, -1):
         candidate_name = sorted_candidates[i]
-        candidate = candidates_data[candidate_name]
-        if (
-            candidate.get("support_total", 0) != 0
-            or candidate.get("oppose_total", 0) != 0
-            or candidate.get("defeated", False) is False
-        ):
-            return i
+        if candidate_name in candidates_data:
+            candidate = candidates_data[candidate_name]
+            if (
+                candidate.get("support_total", 0) != 0
+                or candidate.get("oppose_total", 0) != 0
+                or candidate.get("defeated", False) is False
+            ):
+                return i
+        else:
+            print("wtf")
     return -1
 
 
@@ -115,11 +127,13 @@ def summarize_races(db):
                         ]["party"]
 
             # Get candidate data from FEC
+            print(list(map(trim_name, candidates)))
             params = {
                 "office": race_id_split[0],
                 "state": state,
                 "election_year": 2024,
                 "q": map(trim_name, candidates),
+                "per_page": 50,
             }
             if (
                 race_id_split[0] == "H"
@@ -139,20 +153,26 @@ def summarize_races(db):
                 split_name = FEC_candidate_data["name"].split(", ")
                 last_name = split_name[0]
                 first_name = split_name[1].split(" ")[0]
-                candidate = {name for name in candidates if last_name in name.upper()}
+                candidate = {
+                    name for name in candidates if compare_names(last_name, name)
+                }
+                candidate_race_name = None
                 if len(candidate) == 1:
                     candidate_race_name = candidate.pop()
-                else:
+                elif len(candidate) > 1:
                     candidate = {
-                        name for name in candidate if first_name in name.upper()
+                        name for name in candidate if compare_names(first_name, name)
                     }
                     if len(candidate) == 1:
                         candidate_race_name = candidate.pop()
-                    else:
-                        logging.error(
-                            f"Having trouble locating candidate: {first_name} {last_name} in {state} {race_id}"
-                        )
-                        continue
+                if candidate_race_name is None:
+                    print(
+                        f"Having trouble locating candidate: {first_name} {last_name} in {state} {race_id}"
+                    )
+                    logging.error(
+                        f"Having trouble locating candidate: {first_name} {last_name} in {state} {race_id}"
+                    )
+                    continue
                 names[FEC_candidate_data["name"]] = candidate_race_name
                 candidates_data[candidate_race_name]["candidate_id"] = (
                     FEC_candidate_data["candidate_id"],
@@ -166,14 +186,28 @@ def summarize_races(db):
                 candidates_data[candidate_race_name]["FEC_name"] = FEC_candidate_data[
                     "name"
                 ]
+            for name in candidates:
+                if name not in candidates_data:
+                    print("???")
+                if "FEC_name" not in candidates_data[name]:
+                    print("Couldn't find candidate: " + name)
 
             for ind, race in enumerate(race_data["races"]):
+                is_upcoming = (
+                    date.fromisoformat(race["date"]) > date.today()
+                    if "date" in race and race["date"]
+                    else None
+                )
                 for candidate in race["candidates"]:
                     candidates_data[candidate["name"]]["races"].append(race["type"])
-                    if ind == 0 or (
-                        "won" in candidate
-                        and candidate["won"] is True
-                        and "defeated" not in candidates_data[candidate["name"]]
+                    if (
+                        ind == 0
+                        or is_upcoming is True
+                        or (
+                            "won" in candidate
+                            and candidate["won"] is True
+                            and "defeated" not in candidates_data[candidate["name"]]
+                        )
                     ):
                         candidates_data[candidate["name"]]["defeated"] = False
                     elif (
@@ -182,7 +216,11 @@ def summarize_races(db):
                         and "defeated" not in candidates_data[candidate["name"]]
                     ):
                         candidates_data[candidate["name"]]["defeated"] = True
-                        if candidates_data[candidate["name"]]["defeated_race"] is None:
+                        if "defeated_race" not in candidates_data[
+                            candidate["name"]
+                        ] or (
+                            candidates_data[candidate["name"]]["defeated_race"] is None
+                        ):
                             candidates_data[candidate["name"]]["defeated_race"] = race[
                                 "type"
                             ]
@@ -205,6 +243,9 @@ def summarize_races(db):
                         None,
                     )
                     if k is None:
+                        print(
+                            f"Having trouble locating candidate: {expenditure['candidate_name']} in {state} {race_id}"
+                        )
                         logging.error(
                             f"Having trouble locating candidate: {expenditure['candidate_name']} in {state} {race_id}"
                         )
@@ -235,6 +276,8 @@ def summarize_races(db):
                         2,
                     )
 
+            sorted_candidates = sort_candidates(candidates_data)
+
             # There can be a lot of withdrawn candidates, so remove those who weren't involved in any expenditures
             withdrawn_candidates = (
                 list(race_data["withdrew"].keys()) if "withdrew" in race_data else []
@@ -246,8 +289,26 @@ def summarize_races(db):
                 ):
                     del candidates_data[candidate]
                     del race_data["withdrew"][candidate]
+                else:
+                    if "withdrew_race" in race_data["withdrew"][candidate]:
+                        candidate_details = race_data["withdrew"][candidate]
+                        matching = next(
+                            (
+                                i
+                                for i, race in enumerate(race_data["races"])
+                                if race["type"]
+                                == candidate_details["withdrew_race"]["type"]
+                                and race["party"]
+                                == candidate_details["withdrew_race"]["party"]
+                            ),
+                            None,
+                        )
+                        if matching is not None:
+                            race_data["races"][matching]["candidates"].append(
+                                candidate_details
+                            )
+                            sorted_candidates.append(candidate)
 
-            sorted_candidates = sort_candidates(candidates_data)
             last_index_with_donation = get_last_index_with_donation(
                 sorted_candidates, candidates_data
             )
