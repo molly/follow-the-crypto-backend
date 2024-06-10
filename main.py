@@ -27,6 +27,10 @@ def main():
     update_race_details(db)
     print("Summarize races")
     summarize_races(db)
+
+    # TODO: Trim candidates
+    # TODO: Get schedule e spending per candidate (https://www.fec.gov/data/candidate/S4CA00522/?tab=other-spending)
+
     print("Get top raised PACs")
     get_top_raised_pacs(db)
     print("Update candidate expenditures")

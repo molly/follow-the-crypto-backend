@@ -24,8 +24,13 @@ def compare_names(name_portion, name):
 def trim_name(name):
     m = re.match(r"^(.+)(\s(?:[SJ]r\.?|IX|IV|V?I{0,3}))$", name)
     if m:
-        return m.group(1).split(" ")[-1]
-    return name.split(" ")[-1]
+        last_name = m.group(1).split(" ")[-1]
+    else:
+        last_name = unidecode(name.split(" ")[-1])
+    if len(last_name) < 3:
+        # FEC API won't accept queries of < 3 characters, so short names like "Xu" throw errors
+        return unidecode(name)
+    return unidecode(last_name)
 
 
 def sort_candidates(candidates):
@@ -190,12 +195,12 @@ def summarize_races(db):
                 names[FEC_candidate_data["name"]] = candidate_race_name
 
                 # Add FEC data to candidate data map
-                candidates_data[candidate_race_name]["candidate_id"] = (
-                    FEC_candidate_data["candidate_id"],
-                )
-                candidates_data[candidate_race_name]["party"] = (
-                    FEC_candidate_data["party"][0],
-                )
+                candidates_data[candidate_race_name][
+                    "candidate_id"
+                ] = FEC_candidate_data["candidate_id"]
+                candidates_data[candidate_race_name]["party"] = FEC_candidate_data[
+                    "party"
+                ][0]
                 candidates_data[candidate_race_name][
                     "incumbent_challenge"
                 ] = FEC_candidate_data["incumbent_challenge"]
@@ -215,16 +220,18 @@ def summarize_races(db):
                         )
                         FEC_candidate_data = FEC_candidates_data["results"][0]
                         names[FEC_candidate_data["name"]] = entry["common_name"]
-                        candidates_data[candidate_race_name]["candidate_id"] = (
-                            FEC_candidate_data["candidate_id"],
-                        )
-                        candidates_data[candidate_race_name]["party"] = (
+                        candidates_data[entry["common_name"]][
+                            "candidate_id"
+                        ] = FEC_candidate_data["candidate_id"]
+
+                        candidates_data[entry["common_name"]]["party"] = (
                             FEC_candidate_data["party"][0],
                         )
-                        candidates_data[candidate_race_name][
+
+                        candidates_data[entry["common_name"]][
                             "incumbent_challenge"
                         ] = FEC_candidate_data["incumbent_challenge"]
-                        candidates_data[candidate_race_name][
+                        candidates_data[entry["common_name"]][
                             "FEC_name"
                         ] = FEC_candidate_data["name"]
                     else:
@@ -379,6 +386,34 @@ def summarize_races(db):
                                 candidate_details
                             )
 
+            # Get total raised for each candidate
+            candidate_ids = [
+                c["candidate_id"]
+                for c in candidates_data.values()
+                if "candidate_id" in c
+            ]
+            FEC_totals_data = FEC_fetch(
+                "candidate totals",
+                "https://api.open.fec.gov/v1/candidates/totals",
+                {
+                    "cycle": 2024,
+                    "per_page": 50,
+                    "candidate_id": candidate_ids,
+                },
+            )
+            for total_result in FEC_totals_data["results"]:
+                FEC_name = total_result["name"]
+                if FEC_name not in names:
+                    # This candidate was not found in the list of candidates for this
+                    continue
+                candidate_key = names[FEC_name]
+                candidates_data[candidate_key]["raised_total"] = total_result[
+                    "receipts"
+                ]
+                candidates_data[candidate_key]["spent_total"] = total_result[
+                    "disbursements"
+                ]
+
             # Sort the list of candidates involved in this race (including withdrawn candidates w/ expenditures)
             sorted_candidates = sort_candidates(candidates_data)
             # Trim off the long tail of candidates who have no expenditures
@@ -387,6 +422,8 @@ def summarize_races(db):
             )
             if last_index_with_donation > -1:
                 sorted_candidates = sorted_candidates[: last_index_with_donation + 1]
+
+            # TODO: Remove fringe candidates (based on percentage of vote in past race, or maybe $ raised?)
 
             updated_data = {
                 db.client.field_path(race_id, "candidates"): candidates_data,
