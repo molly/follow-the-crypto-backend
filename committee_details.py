@@ -63,5 +63,7 @@ def hydrate_committees(db):
                 ]
                 combined_committee_totals["disbursements"] += totals["disbursements"]
 
-        db.client.collection("committees").document(committee["id"]).set(committee_data)
+            db.client.collection("committees").document(committee["id"]).set(
+                committee_data
+            )
     db.client.collection("totals").document("committees").set(combined_committee_totals)

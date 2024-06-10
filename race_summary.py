@@ -62,8 +62,6 @@ def get_last_index_with_donation(sorted_candidates, candidates_data):
                 or candidate.get("defeated", False) is False
             ):
                 return i
-        else:
-            print("wtf")
     return -1
 
 
@@ -89,25 +87,33 @@ def summarize_races(db):
         all_expenditures = (
             db.client.collection("expendituresByState").document(state).get().to_dict()
         )
+
+        # Iterate through each race in each state
         for race_id, race_data in state_data.items():
             race_id_split = race_id.split("-")
 
-            # Get set of candidate names
+            # Create set for each unique candidate in any sub-race in this race. This will always be equivalent to
+            # Object.keys(candidates_data) and is just maintained for convenience.
             candidates = {
                 candidate["name"]
                 for race in race_data["races"]
                 for candidate in race["candidates"]
             }
+
+            # Create dict with an entry for each candidate. This dict will eventually be saved to the "candidates" field
+            # in the race entry.
             candidates_data = {
                 candidate: {
                     "common_name": candidate,
                     "support_total": 0,
                     "oppose_total": 0,
-                    "races": [],
-                    "defeated_race": None,
+                    "races": [],  # Sub-races in which this person was a candidate
+                    "defeated_race": None,  # Race in which this candidate was defeated
                 }
                 for candidate in candidates
             }
+
+            # Add withdrawn candidates to this set and dict
             if "withdrew" in race_data:
                 withdrawn_candidates = {
                     candidate for candidate in race_data["withdrew"].keys()
@@ -116,18 +122,14 @@ def summarize_races(db):
                 for candidate in withdrawn_candidates:
                     candidates_data[candidate] = {
                         "common_name": candidate,
-                        "withdrew": True,
                         "support_total": 0,
                         "oppose_total": 0,
                         "races": [],
+                        "withdrew": True,
+                        "withdrew_race": None,  # Race from which candidate withdrew
                     }
-                    if "party" in race_data["withdrew"][candidate]:
-                        candidates_data[candidate]["party"] = race_data["withdrew"][
-                            candidate
-                        ]["party"]
 
-            # Get candidate data from FEC
-            print(list(map(trim_name, candidates)))
+            # Try to get candidate data from FEC
             params = {
                 "office": race_id_split[0],
                 "state": state,
@@ -148,32 +150,46 @@ def summarize_races(db):
                 params,
             )
 
+            # Map FEC candidate names to formatted candidate names (which are being used as keys)
             names = {}
+            # Add relevant FEC data to candidate data
             for FEC_candidate_data in FEC_candidates_data["results"]:
+                # Try to match FEC candidate result to candidate in our data
                 split_name = FEC_candidate_data["name"].split(", ")
                 last_name = split_name[0]
                 first_name = split_name[1].split(" ")[0]
+
+                # Get the common name for this candidate
+                candidate_race_name = None
                 candidate = {
                     name for name in candidates if compare_names(last_name, name)
                 }
-                candidate_race_name = None
                 if len(candidate) == 1:
                     candidate_race_name = candidate.pop()
                 elif len(candidate) > 1:
+                    # Sometimes there are multiple candidates with the same surname, in which case we compare first
+                    # names.
                     candidate = {
                         name for name in candidate if compare_names(first_name, name)
                     }
                     if len(candidate) == 1:
                         candidate_race_name = candidate.pop()
                 if candidate_race_name is None:
+                    # There weren't any matching candidates, or there were still multiple candidates in the results
+                    # This is not ALWAYS an error — there can be results from the FEC API for candidates we're not
+                    # interested in (and who therefore aren't represented in the candidates set).
                     print(
-                        f"Having trouble locating candidate: {first_name} {last_name} in {state} {race_id}"
+                        f"Having trouble locating FEC candidate in candidates data: {first_name} {last_name} in {state} {race_id}"
                     )
                     logging.error(
-                        f"Having trouble locating candidate: {first_name} {last_name} in {state} {race_id}"
+                        f"Having trouble locating FEC candidate in candidates data: {first_name} {last_name} in {state} {race_id}"
                     )
                     continue
+
+                # Map FEC name to common name
                 names[FEC_candidate_data["name"]] = candidate_race_name
+
+                # Add FEC data to candidate data map
                 candidates_data[candidate_race_name]["candidate_id"] = (
                     FEC_candidate_data["candidate_id"],
                 )
@@ -186,36 +202,76 @@ def summarize_races(db):
                 candidates_data[candidate_race_name]["FEC_name"] = FEC_candidate_data[
                     "name"
                 ]
-            for name in candidates:
-                if name not in candidates_data:
-                    print("???")
-                if "FEC_name" not in candidates_data[name]:
-                    print("Couldn't find candidate: " + name)
 
+            for entry in candidates_data.values():
+                if "candidate_id" not in entry:
+                    if entry["common_name"] in db.candidates:
+                        # A few weird edge cases are in the candidates constant, get that data here
+                        c_id = db.candidates[entry["common_name"]]
+                        FEC_candidates_data = FEC_fetch(
+                            f"candidates data for {state}",
+                            "https://api.open.fec.gov/v1/candidates/search",
+                            {"candidate_id": [c_id]},
+                        )
+                        FEC_candidate_data = FEC_candidates_data["results"][0]
+                        names[FEC_candidate_data["name"]] = entry["common_name"]
+                        candidates_data[candidate_race_name]["candidate_id"] = (
+                            FEC_candidate_data["candidate_id"],
+                        )
+                        candidates_data[candidate_race_name]["party"] = (
+                            FEC_candidate_data["party"][0],
+                        )
+                        candidates_data[candidate_race_name][
+                            "incumbent_challenge"
+                        ] = FEC_candidate_data["incumbent_challenge"]
+                        candidates_data[candidate_race_name][
+                            "FEC_name"
+                        ] = FEC_candidate_data["name"]
+                    else:
+                        print(
+                            f"Having trouble locating FEC candidate: {entry['common_name']} in {state}-{race_id}"
+                        )
+                        logging.error(
+                            f"Having trouble locating FEC candidate: {entry['common_name']} in {state}-{race_id}"
+                        )
+
+            # Iterate through each subrace
             for ind, race in enumerate(race_data["races"]):
                 is_upcoming = (
                     date.fromisoformat(race["date"]) > date.today()
                     if "date" in race and race["date"]
                     else None
                 )
+
+                # Iterate through each candidate in the subrace. These should generally be in reverse chrono order.
                 for candidate in race["candidates"]:
+                    # Add this subrace to their list of involved races
                     candidates_data[candidate["name"]]["races"].append(race["type"])
-                    if (
-                        ind == 0
-                        or is_upcoming is True
-                        or (
-                            "won" in candidate
-                            and candidate["won"] is True
-                            and "defeated" not in candidates_data[candidate["name"]]
-                        )
+                    if is_upcoming is True or (
+                        "won" in candidate
+                        and candidate["won"] is True
+                        and "defeated" not in candidates_data[candidate["name"]]
                     ):
+                        # If the candidate is involved in a race that's still upcoming
+                        #   OR this is the most recent race, and they won it, mark them as not defeated
                         candidates_data[candidate["name"]]["defeated"] = False
                     elif (
                         "won" in candidate
                         and candidate["won"] is False
                         and "defeated" not in candidates_data[candidate["name"]]
                     ):
+                        # If this race already happened
+                        #   AND the candidate is not listed in a more recent or upcoming race*
+                        #   AND candidate has the "won" field set to False for this race, mark them as defeated
+                        #
+                        # * It is possible for a candidate to lose a race and still be listed in a more recent or
+                        #   upcoming race, for example as a write-in or because they secured enough signatures
+                        #   despite not progressing through the convention vote.
                         candidates_data[candidate["name"]]["defeated"] = True
+
+                        # If they lost, and they do not already have a race listed in their defeated races list,
+                        # mark this as the defeated race because it was the most advanced race in which they
+                        # participated.
                         if "defeated_race" not in candidates_data[
                             candidate["name"]
                         ] or (
@@ -224,45 +280,54 @@ def summarize_races(db):
                             candidates_data[candidate["name"]]["defeated_race"] = race[
                                 "type"
                             ]
-                    if "withdrew" in candidate and candidate["withdrew"]:
-                        candidates_data[candidate["name"]]["withdrew"] = True
 
             expenditures = all_expenditures["by_race"][f"{state}-{race_id}"][
                 "expenditures"
             ]
+            # Iterate through each expenditure in this race
             for expenditure in expenditures:
+                # Try to find the candidate this expenditure is associated with
                 try:
+                    # Ideally this will match their FEC_name
                     candidate_key = names[expenditure["candidate_name"]]
                 except KeyError:
-                    k = next(
-                        (
-                            key
-                            for key in names
-                            if expenditure["candidate_last_name"] in key
-                        ),
-                        None,
-                    )
+                    # If it doesn't, try to find the candidate with a matching last name
+                    k = None
+                    ks = {
+                        key
+                        for key in names
+                        if expenditure["candidate_last_name"] in key
+                    }
+                    if len(ks) == 1:
+                        k = ks.pop()
                     if k is None:
+                        # TODO: We're going to have to figure out something else if we end up here.
                         print(
-                            f"Having trouble locating candidate: {expenditure['candidate_name']} in {state} {race_id}"
+                            f"Having trouble locating candidate named in expenditure: {expenditure['candidate_name']} in {state} {race_id}"
                         )
                         logging.error(
-                            f"Having trouble locating candidate: {expenditure['candidate_name']} in {state} {race_id}"
+                            f"Having trouble locating candidate named in expenditure: {expenditure['candidate_name']} in {state} {race_id}"
                         )
                         continue
                     else:
                         candidate_key = names[k]
 
+                # Initialize fields if necessary
                 if "expenditure_races" not in candidates_data[candidate_key]:
                     candidates_data[candidate_key]["expenditure_races"] = set()
                 if "expenditure_committees" not in candidates_data[candidate_key]:
                     candidates_data[candidate_key]["expenditure_committees"] = set()
+
+                # Add the expenditure's sub-race to the candidate's list of expenditure_races
                 candidates_data[candidate_key]["expenditure_races"].add(
                     get_expenditure_race_type(expenditure)
                 )
+                # Add this expenditure's committee to the candidate's list of expenditure_committees
                 candidates_data[candidate_key]["expenditure_committees"].add(
                     expenditure["committee_id"]
                 )
+
+                # Add expenditure to total support/oppose amount
                 if expenditure["support_oppose_indicator"] == "S":
                     candidates_data[candidate_key]["support_total"] = round(
                         candidates_data[candidate_key]["support_total"]
@@ -276,9 +341,6 @@ def summarize_races(db):
                         2,
                     )
 
-            sorted_candidates = sort_candidates(candidates_data)
-
-            # There can be a lot of withdrawn candidates, so remove those who weren't involved in any expenditures
             withdrawn_candidates = (
                 list(race_data["withdrew"].keys()) if "withdrew" in race_data else []
             )
@@ -287,19 +349,28 @@ def summarize_races(db):
                     candidates_data[candidate]["support_total"] == 0
                     and candidates_data[candidate]["oppose_total"] == 0
                 ):
+                    # There can be a lot of withdrawn candidates, so only keep those involved in some expenditure
                     del candidates_data[candidate]
                     del race_data["withdrew"][candidate]
                 else:
+                    # However, if they were involved, we need to add them to the list of candidates in the race from
+                    # which they withdrew.
                     if "withdrew_race" in race_data["withdrew"][candidate]:
                         candidate_details = race_data["withdrew"][candidate]
                         matching = next(
                             (
                                 i
                                 for i, race in enumerate(race_data["races"])
-                                if race["type"]
-                                == candidate_details["withdrew_race"]["type"]
-                                and race["party"]
-                                == candidate_details["withdrew_race"]["party"]
+                                if (
+                                    (
+                                        race["type"]
+                                        == candidate_details["withdrew_race"]["type"]
+                                    )
+                                    and (
+                                        race["party"]
+                                        == candidate_details["withdrew_race"]["party"]
+                                    )
+                                )
                             ),
                             None,
                         )
@@ -307,8 +378,10 @@ def summarize_races(db):
                             race_data["races"][matching]["candidates"].append(
                                 candidate_details
                             )
-                            sorted_candidates.append(candidate)
 
+            # Sort the list of candidates involved in this race (including withdrawn candidates w/ expenditures)
+            sorted_candidates = sort_candidates(candidates_data)
+            # Trim off the long tail of candidates who have no expenditures
             last_index_with_donation = get_last_index_with_donation(
                 sorted_candidates, candidates_data
             )
@@ -322,5 +395,8 @@ def summarize_races(db):
             if "withdrew" in race_data:
                 updated_data[db.client.field_path(race_id, "withdrew")] = race_data[
                     "withdrew"
+                ]
+                updated_data[db.client.field_path(race_id, "races")] = race_data[
+                    "races"
                 ]
             db.client.collection("raceDetails").document(state).update(updated_data)

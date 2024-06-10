@@ -13,6 +13,7 @@ class Database:
         self.individual_employers = None
         self.occupation_allowlist = None
         self.duplicate_contributions = None
+        self.candidates = None
         self.all_committees = None
         self.ads = None
 
@@ -37,5 +38,6 @@ class Database:
         self.duplicate_contributions = (
             constants.document("duplicateContributions").get().to_dict()
         )
+        self.candidates = constants.document("candidates").get().to_dict()
         self.all_committees = constants.document("allCommittees").get().to_dict()
         self.ads = constants.document("ads").get().to_dict()
