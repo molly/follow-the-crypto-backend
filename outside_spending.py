@@ -1,3 +1,4 @@
+import logging
 from utils import FEC_fetch
 
 
@@ -18,9 +19,12 @@ def update_candidate_outside_spending(db):
                     "candidate_id": candidate_ids,
                     "per_page": 100,
                     "cycle": 2024,
+                    "is_notice": True,
                 },
             )
+            outside_spending = {}
             if candidate_data["pagination"]["pages"] > 1:
+                # TODO paginate
                 print("has more")
             for result in candidate_data["results"]:
                 candidate_id = result["candidate_id"]
@@ -30,28 +34,29 @@ def update_candidate_outside_spending(db):
                     if candidate.get("candidate_id") == candidate_id
                 )
                 if match:
-                    if "outside_spending" not in race_data["candidates"][match]:
-                        state_data[race_id]["candidates"][match]["outside_spending"] = {
+                    if match not in outside_spending:
+                        outside_spending[match] = {
                             "support": [],
                             "oppose": [],
                             "support_total": 0,
                             "oppose_total": 0,
                         }
                     if result["support_oppose_indicator"] == "S":
-                        state_data[race_id]["candidates"][match]["outside_spending"][
-                            "support"
-                        ].append(result)
-                        state_data[race_id]["candidates"][match]["outside_spending"][
-                            "support_total"
-                        ] += result["total"]
+                        outside_spending[match]["support"].append(result)
+                        outside_spending[match]["support_total"] += result["total"]
                     elif result["support_oppose_indicator"] == "O":
-                        state_data[race_id]["candidates"][match]["outside_spending"][
-                            "oppose"
-                        ].append(result)
-                        state_data[race_id]["candidates"][match]["outside_spending"][
-                            "oppose_total"
-                        ] += result["total"]
+                        outside_spending[match]["oppose"].append(result)
+                        outside_spending[match]["oppose_total"] += result["total"]
 
                 else:
-                    print("wtf")
-        db.client.collection("raceDetails").document(state).set(state_data, merge=True)
+                    logging.error(
+                        f"Couldn't find candidate for outside expenditure: {candidate_id}"
+                    )
+                    print(
+                        f"Couldn't find candidate for outside expenditure: {candidate_id}"
+                    )
+            for candidate_name, candidate_spending in outside_spending.items():
+                state_data[race_id]["candidates"][candidate_name][
+                    "outside_spending"
+                ] = candidate_spending
+        db.client.collection("raceDetails").document(state).set(state_data)

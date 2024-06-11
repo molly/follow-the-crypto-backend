@@ -43,6 +43,8 @@ def update_committee_expenditures(db):
                     "per_page": 100,
                     "last_index": last_index,
                     "last_expenditure_date": last_expenditure_date,
+                    "cycle": 2024,
+                    "is_notice": True,
                 },
             )
 
