@@ -7,6 +7,7 @@ from committee_expenditures import update_committee_expenditures
 from races import update_race_details
 from race_summary import summarize_races
 from candidate_trim import trim_candidates
+from outside_spending import update_candidate_outside_spending
 from pacs import get_top_raised_pacs
 from candidate_expenditures import update_candidates_expenditures
 from ads import get_ads
@@ -18,24 +19,26 @@ def main():
 
     db = Database()
     db.get_constants()
-    print("Hydrating committees")
-    hydrate_committees(db)
-    print("Updating committee contributions")
-    update_committee_contributions(db)
-    print("Updating committee expenditures")
-    update_committee_expenditures(db)
-    print("Updating race details")
-    update_race_details(db)
-    print("Summarize races")
-    summarize_races(db)
-    trim_candidates(db)
-    # TODO: Get schedule e spending per candidate (https://www.fec.gov/data/candidate/S4CA00522/?tab=other-spending)
-    print("Get top raised PACs")
-    get_top_raised_pacs(db)
-    print("Update candidate expenditures")
-    update_candidates_expenditures(db)
-    print("Get ads")
-    get_ads(db)
+    # print("Hydrating committees")
+    # hydrate_committees(db)
+    # print("Updating committee contributions")
+    # update_committee_contributions(db)
+    # print("Updating committee expenditures")
+    # update_committee_expenditures(db)
+    # print("Updating race details")
+    # update_race_details(db)
+    # print("Summarize races")
+    # summarize_races(db)
+    # print("Trimming candidate lists")
+    # trim_candidates(db)
+    print("Getting outside spending for candidates")
+    update_candidate_outside_spending(db)
+    # print("Get top raised PACs")
+    # get_top_raised_pacs(db)
+    # print("Update candidate expenditures")
+    # update_candidates_expenditures(db)
+    # print("Get ads")
+    # get_ads(db)
 
 
 if __name__ == "__main__":
