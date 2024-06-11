@@ -414,20 +414,8 @@ def summarize_races(db):
                     "disbursements"
                 ]
 
-            # Sort the list of candidates involved in this race (including withdrawn candidates w/ expenditures)
-            sorted_candidates = sort_candidates(candidates_data)
-            # Trim off the long tail of candidates who have no expenditures
-            last_index_with_donation = get_last_index_with_donation(
-                sorted_candidates, candidates_data
-            )
-            if last_index_with_donation > -1:
-                sorted_candidates = sorted_candidates[: last_index_with_donation + 1]
-
-            # TODO: Remove fringe candidates (based on percentage of vote in past race, or maybe $ raised?)
-
             updated_data = {
                 db.client.field_path(race_id, "candidates"): candidates_data,
-                db.client.field_path(race_id, "candidatesOrder"): sorted_candidates,
             }
             if "withdrew" in race_data:
                 updated_data[db.client.field_path(race_id, "withdrew")] = race_data[
