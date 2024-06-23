@@ -11,6 +11,10 @@ def pick(d, keys):
     return {k: d[k] for k in keys if k in d}
 
 
+def fatal_code(e):
+    return e.response.status_code == 422 or 400 <= e.response.status_code < 500
+
+
 @backoff.on_exception(
     backoff.constant,
     (
@@ -21,6 +25,7 @@ def pick(d, keys):
     ),
     interval=20,
     max_tries=5,
+    giveup=fatal_code,
 )
 def FEC_fetch(description, url, params={}):
     r = requests.get(

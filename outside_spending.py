@@ -1,5 +1,22 @@
 import logging
-from utils import FEC_fetch
+from utils import FEC_fetch, pick
+
+SCHEDULE_E_FIELDS = [
+    "expenditure_amount",
+    "expenditure_date",
+    "expenditure_description",
+    "support_oppose_indicator",
+    "candidate_id",
+    "category_code",
+    "category_code_full",
+    "committee_id",
+    "pdf_url",
+]
+
+
+def split_into_chunks(array):
+    """Split into chunks of max length 10, to handle limit on number of candidate IDs"""
+    return [array[i : i + 10] for i in range(0, len(array), 10)]
 
 
 def update_candidate_outside_spending(db):
@@ -12,49 +29,78 @@ def update_candidate_outside_spending(db):
                 for candidate in race_data["candidates"].values()
                 if "candidate_id" in candidate
             ]
-            candidate_data = FEC_fetch(
-                "outside spending for candidates",
-                "https://api.open.fec.gov/v1/schedules/schedule_e/by_candidate",
-                {
-                    "candidate_id": candidate_ids,
-                    "per_page": 100,
-                    "cycle": 2024,
-                    "is_notice": True,
-                },
-            )
+            candidate_id_chunks = split_into_chunks(candidate_ids)
             outside_spending = {}
-            if candidate_data["pagination"]["pages"] > 1:
-                # TODO paginate
-                print("has more")
-            for result in candidate_data["results"]:
-                candidate_id = result["candidate_id"]
-                match = next(
-                    candidate["common_name"]
-                    for candidate in race_data["candidates"].values()
-                    if candidate.get("candidate_id") == candidate_id
-                )
-                if match:
-                    if match not in outside_spending:
-                        outside_spending[match] = {
-                            "support": [],
-                            "oppose": [],
-                            "support_total": 0,
-                            "oppose_total": 0,
-                        }
-                    if result["support_oppose_indicator"] == "S":
-                        outside_spending[match]["support"].append(result)
-                        outside_spending[match]["support_total"] += result["total"]
-                    elif result["support_oppose_indicator"] == "O":
-                        outside_spending[match]["oppose"].append(result)
-                        outside_spending[match]["oppose_total"] += result["total"]
+            for chunk in candidate_id_chunks:
+                last_index = None
+                last_expenditure_date = None
+                result_count = 0
+                while True:
+                    candidate_data = FEC_fetch(
+                        "outside spending for candidates",
+                        "https://api.open.fec.gov/v1/schedules/schedule_e",
+                        {
+                            "candidate_id": chunk,
+                            "per_page": 100,
+                            "cycle": 2024,
+                            "is_notice": True,
+                            "last_index": last_index,
+                            "last_expenditure_date": last_expenditure_date,
+                        },
+                    )
+                    result_count += candidate_data["pagination"]["per_page"]
 
-                else:
-                    logging.error(
-                        f"Couldn't find candidate for outside expenditure: {candidate_id}"
-                    )
-                    print(
-                        f"Couldn't find candidate for outside expenditure: {candidate_id}"
-                    )
+                    for result in candidate_data["results"]:
+                        if result["memoed_subtotal"]:
+                            # Avoid double-counting memoed items
+                            continue
+                        candidate_id = result["candidate_id"]
+                        match = next(
+                            candidate["common_name"]
+                            for candidate in race_data["candidates"].values()
+                            if candidate.get("candidate_id") == candidate_id
+                        )
+                        if match:
+                            if match not in outside_spending:
+                                outside_spending[match] = {
+                                    "support": [],
+                                    "oppose": [],
+                                    "support_total": 0,
+                                    "oppose_total": 0,
+                                }
+                            if result["support_oppose_indicator"] == "S":
+                                outside_spending[match]["support"].append(
+                                    pick(result, SCHEDULE_E_FIELDS)
+                                )
+                                outside_spending[match]["support_total"] += result[
+                                    "expenditure_amount"
+                                ]
+                            elif result["support_oppose_indicator"] == "O":
+                                outside_spending[match]["oppose"].append(
+                                    pick(result, SCHEDULE_E_FIELDS)
+                                )
+                                outside_spending[match]["oppose_total"] += result[
+                                    "expenditure_amount"
+                                ]
+
+                        else:
+                            logging.error(
+                                f"Couldn't find candidate for outside expenditure: {candidate_id}"
+                            )
+                            print(
+                                f"Couldn't find candidate for outside expenditure: {candidate_id}"
+                            )
+
+                    # Fetch another page if needed
+                    if result_count <= candidate_data["pagination"]["count"]:
+                        last_expenditure_date = candidate_data["pagination"][
+                            "last_indexes"
+                        ]["last_expenditure_date"]
+                        last_index = candidate_data["pagination"]["last_indexes"][
+                            "last_index"
+                        ]
+                    else:
+                        break
             for candidate_name, candidate_spending in outside_spending.items():
                 state_data[race_id]["candidates"][candidate_name][
                     "outside_spending"

@@ -24,6 +24,14 @@ to_skip = {
     "Clayton Chapman",
     "Dennis Aryan",
     "Michael Sigmon",
+    "Susan Hall",
+    "Chris Corey",
+    "Aamir Arif",
+    "Richard Siegel",
+    "Lea Sherman",
+    "Christian Robbins",
+    "Alexander Dodenhoff",
+    "Paul Briscoe",
 }
 
 
