@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 import logging
 import re
 from utils import FEC_fetch
@@ -183,10 +183,7 @@ def summarize_races(db):
                     # There weren't any matching candidates, or there were still multiple candidates in the results
                     # This is not ALWAYS an error — there can be results from the FEC API for candidates we're not
                     # interested in (and who therefore aren't represented in the candidates set).
-                    print(
-                        f"Having trouble locating FEC candidate in candidates data: {first_name} {last_name} in {state} {race_id}"
-                    )
-                    logging.error(
+                    logging.debug(
                         f"Having trouble locating FEC candidate in candidates data: {first_name} {last_name} in {state} {race_id}"
                     )
                     continue
@@ -244,11 +241,21 @@ def summarize_races(db):
 
             # Iterate through each subrace
             for ind, race in enumerate(race_data["races"]):
-                is_upcoming = (
-                    date.fromisoformat(race["date"]) > date.today()
-                    if "date" in race and race["date"]
-                    else None
-                )
+                is_upcoming = None
+                has_winner = any("won" in candidate for candidate in race["candidates"])
+                if "date" in race and race["date"]:
+                    race_date = date.fromisoformat(race["date"])
+                    if race_date > date.today():
+                        # Race is happening sometime in the future.
+                        is_upcoming = True
+                    elif (
+                        race_date > (date.today() - timedelta(days=7))
+                        and not has_winner
+                    ):
+                        # Race happened within the last week, but outcome has not been announced.
+                        is_upcoming = True
+                    else:
+                        is_upcoming = False
 
                 # Iterate through each candidate in the subrace. These should generally be in reverse chrono order.
                 for candidate in race["candidates"]:

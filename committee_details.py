@@ -2,6 +2,10 @@ from utils import FEC_fetch, pick
 
 
 def hydrate_committees(db):
+    """
+    Fetch committee details for the list of committees in the constants section of the database.
+    TODO: Dynamically find committees?
+    """
     combined_committee_totals = {"receipts": 0, "expenditures": 0, "disbursements": 0}
     for committee in db.committees.values():
         details_data = FEC_fetch(
@@ -42,7 +46,12 @@ def hydrate_committees(db):
                 ),
                 params={"cycle": 2024},
             )
-            if totals_data and "results" in totals_data and totals_data["results"][0]:
+            if (
+                totals_data
+                and "results" in totals_data
+                and len(totals_data["results"])
+                and totals_data["results"][0]
+            ):
                 totals = totals_data["results"][0]
                 committee_data.update(
                     **pick(
@@ -51,6 +60,7 @@ def hydrate_committees(db):
                             "contributions",
                             "contribution_refunds",
                             "disbursements",
+                            "last_cash_on_hand_end_period",
                             "net_contributions",
                             "receipts",
                             "independent_expenditures",

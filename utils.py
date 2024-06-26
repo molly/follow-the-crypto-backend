@@ -12,7 +12,7 @@ def pick(d, keys):
 
 
 def fatal_code(e):
-    return e.response.status_code == 422 or 400 <= e.response.status_code < 500
+    return e.response.status_code == 422 or e.response.status_code >= 500
 
 
 @backoff.on_exception(

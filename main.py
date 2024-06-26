@@ -2,7 +2,11 @@ import google.cloud.logging
 from Database import Database
 
 from committee_details import hydrate_committees
-from committee_contributions import update_committee_contributions
+from fetch_committee_contributions import (
+    update_committee_contributions,
+    update_recent_committee_contributions,
+)
+from process_committee_contributions import process_committee_contributions
 from committee_expenditures import update_committee_expenditures
 from races import update_race_details
 from race_summary import summarize_races
@@ -14,24 +18,28 @@ from ads import get_ads
 
 
 def main():
+    """Wipe everything out and then re-fetch all data. Mostly used for development."""
     client = google.cloud.logging.Client()
     client.setup_logging()
 
     db = Database()
     db.get_constants()
-    # print("Hydrating committees")
-    # hydrate_committees(db)
-    # print("Updating committee contributions")
-    # update_committee_contributions(db)
-    # print("Updating committee expenditures")
-    # update_committee_expenditures(db)
-    # print("Updating race details")
-    # update_race_details(db)
-    # print("Summarize races")
-    # summarize_races(db)
-    # print("Trimming candidate lists")
-    # trim_candidates(db)
-    # print("Getting outside spending for candidates")
+    print("Hydrating committees")
+    hydrate_committees(db)
+    print("Updating committee contributions")
+    update_committee_contributions(db)
+    update_recent_committee_contributions(db)
+    print("Processing committee contributions")
+    process_committee_contributions(db)
+    print("Updating committee expenditures")
+    update_committee_expenditures(db)
+    print("Updating race details")
+    update_race_details(db)
+    print("Summarize races")
+    summarize_races(db)
+    print("Trimming candidate lists")
+    trim_candidates(db)
+    print("Getting outside spending for candidates")
     update_candidate_outside_spending(db)
     print("Get top raised PACs")
     get_top_raised_pacs(db)
