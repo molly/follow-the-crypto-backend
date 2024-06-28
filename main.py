@@ -7,7 +7,11 @@ from fetch_committee_contributions import (
     update_recent_committee_contributions,
 )
 from process_committee_contributions import process_committee_contributions
-from committee_expenditures import update_committee_expenditures
+from committee_expenditures import (
+    update_committee_expenditures,
+    update_recent_committee_expenditures,
+)
+from process_committee_expenditures import process_recent_expenditures
 from races import update_race_details
 from race_summary import summarize_races
 from candidate_trim import trim_candidates
@@ -33,6 +37,9 @@ def main():
     process_committee_contributions(db)
     print("Updating committee expenditures")
     update_committee_expenditures(db)
+    update_recent_committee_expenditures(db)
+    print("Processing committee expenditures")
+    process_recent_expenditures(db)
     print("Updating race details")
     update_race_details(db)
     print("Summarize races")

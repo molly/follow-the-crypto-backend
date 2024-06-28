@@ -12,7 +12,10 @@ def pick(d, keys):
 
 
 def fatal_code(e):
-    return e.response.status_code == 422 or e.response.status_code >= 500
+    try:
+        return e.response.status_code == 422 or e.response.status_code >= 500
+    except AttributeError:
+        return False
 
 
 @backoff.on_exception(

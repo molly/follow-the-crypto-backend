@@ -166,9 +166,11 @@ def process_committee_contributions(db):
     raw_committee_contributions = db.client.collection("rawContributions").stream()
     for doc in raw_committee_contributions:
         committee_id, contributions = doc.id, doc.to_dict()
+        all_contribs = []
         donorMap = {
             "contributions_count": 0,
             "groups": {},
+            "recent": [],
             "total_contributed": 0,
             "total_transferred": 0,
         }
@@ -176,8 +178,10 @@ def process_committee_contributions(db):
         redacted_count = 0
         for contrib in contributions["transactions"]:
             details = process_contribution(contrib, db, donorMap)
-            if details is not None and details.get("redacted"):
-                redacted_count += 1
+            if details is not None:
+                all_contribs.append(details)
+                if details.get("redacted"):
+                    redacted_count += 1
 
         for group, data in donorMap["groups"].items():
             # Combine the rollups with the contributions list
@@ -211,6 +215,13 @@ def process_committee_contributions(db):
                 reverse=True,
             )
             del donorMap["groups"][group]["rollup"]
+
+            # Sort the list of all contributions by receipt date
+            donorMap["recent"] = sorted(
+                all_contribs,
+                key=lambda x: x["contribution_receipt_date"],
+                reverse=True,
+            )[:10]
 
         # Turn the map of groups into a list, sorted descending by total contributions
         donor_list = [

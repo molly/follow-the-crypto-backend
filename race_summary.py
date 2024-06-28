@@ -71,7 +71,11 @@ def get_last_index_with_donation(sorted_candidates, candidates_data):
 
 
 def get_expenditure_race_type(expenditure):
-    election_type = expenditure.get("election_type", "")[0]
+    election_type = expenditure.get("election_type", None)
+    if election_type is None:
+        return None
+    else:
+        election_type = election_type[0]
     if election_type == "G":
         return "general"
     if election_type == "P":
