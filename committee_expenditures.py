@@ -25,6 +25,7 @@ EXPENDITURE_FIELDS = [
     # Custom added fields
     "subrace",
     "committee_id",
+    "uid",
 ]
 
 
@@ -57,9 +58,11 @@ def update_committee_expenditures(db):
                 params={
                     "committee_id": committee_id,
                     "per_page": 100,
+                    "is_notice": True,
+                    "most_recent": True,
+                    "cycle": 2024,
                     "last_index": last_index,
                     "last_expenditure_date": last_expenditure_date,
-                    "cycle": 2024,
                 },
             )
 
@@ -69,9 +72,12 @@ def update_committee_expenditures(db):
             exp_count += data["pagination"]["per_page"]
 
             for exp in data["results"]:
+                if exp["memoed_subtotal"]:
+                    continue
                 exp["subrace"] = get_expenditure_race_type(exp)
                 exp["committee_id"] = committee_id
                 uid = "{}-{}".format(exp["committee_id"], exp["transaction_id"])
+                exp["uid"] = uid
                 if exp["amendment_indicator"] == "A":
                     if uid in transactions and (
                         transactions[uid]["amendment_indicator"] == "N"
@@ -114,6 +120,8 @@ def update_recent_committee_expenditures(db):
                     "per_page": 100,
                     "min_date": "2023-01-01",
                     "sort": "-expenditure_date",
+                    "is_notice": True,
+                    "most_recent": True,
                     "page": page,
                 },
             )
@@ -129,6 +137,7 @@ def update_recent_committee_expenditures(db):
                 exp["subrace"] = get_expenditure_race_type(exp)
 
                 uid = "{}-{}".format(exp["committee_id"], exp["transaction_id"])
+                exp["uid"] = uid
                 if exp["amendment_indicator"] == "A":
                     if uid in transactions and (
                         (

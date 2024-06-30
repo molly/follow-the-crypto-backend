@@ -11,6 +11,7 @@ SCHEDULE_E_FIELDS = [
     "category_code_full",
     "committee_id",
     "pdf_url",
+    "transaction_id",
     "subrace",
 ]
 
@@ -36,6 +37,7 @@ def update_candidate_outside_spending(db):
                 last_index = None
                 last_expenditure_date = None
                 result_count = 0
+                transaction_ids = set()
                 while True:
                     candidate_data = FEC_fetch(
                         "outside spending for candidates",
@@ -45,6 +47,7 @@ def update_candidate_outside_spending(db):
                             "per_page": 100,
                             "cycle": 2024,
                             "is_notice": True,
+                            "most_recent": True,
                             "last_index": last_index,
                             "last_expenditure_date": last_expenditure_date,
                         },
@@ -77,6 +80,7 @@ def update_candidate_outside_spending(db):
                                 outside_spending[match]["support_total"] += result[
                                     "expenditure_amount"
                                 ]
+                                transaction_ids.add(result["transaction_id"])
                             elif result["support_oppose_indicator"] == "O":
                                 outside_spending[match]["oppose"].append(
                                     pick(result, SCHEDULE_E_FIELDS)
@@ -84,6 +88,7 @@ def update_candidate_outside_spending(db):
                                 outside_spending[match]["oppose_total"] += result[
                                     "expenditure_amount"
                                 ]
+                                transaction_ids.add(result["transaction_id"])
 
                         else:
                             logging.error(
@@ -103,6 +108,120 @@ def update_candidate_outside_spending(db):
                         ]
                     else:
                         break
+
+                page = 1
+                while True:
+                    candidate_data = FEC_fetch(
+                        "outside spending for candidates",
+                        "https://api.open.fec.gov/v1/schedules/schedule_e/efile",
+                        {
+                            "candidate_id": chunk,
+                            "per_page": 100,
+                            "min_date": "2023-01-01",
+                            "is_notice": True,
+                            "most_recent": True,
+                            "page": page,
+                        },
+                    )
+                    for result in candidate_data["results"]:
+                        amendment = False
+                        if result["transaction_id"] in transaction_ids:
+                            if result["amendment_indicator"] == "A":
+                                # This was amended, so replace the transaction from above.
+                                amendment = True
+                            else:
+                                continue
+                        result["subrace"] = get_expenditure_race_type(result)
+                        candidate_id = result["candidate_id"]
+                        match = next(
+                            candidate["common_name"]
+                            for candidate in race_data["candidates"].values()
+                            if candidate.get("candidate_id") == candidate_id
+                        )
+                        if match:
+                            if match not in outside_spending:
+                                outside_spending[match] = {
+                                    "support": [],
+                                    "oppose": [],
+                                    "support_total": 0,
+                                    "oppose_total": 0,
+                                }
+                            if result["support_oppose_indicator"] == "S":
+                                if amendment:
+                                    old_index = next(
+                                        i
+                                        for i, item in enumerate(
+                                            outside_spending[match]["support"]
+                                        )
+                                        if item["transaction_id"]
+                                        == result["transaction_id"]
+                                    )
+                                    outside_spending[match][
+                                        "support_total"
+                                    ] -= outside_spending[match]["support"][old_index][
+                                        "expenditure_amount"
+                                    ]
+                                    outside_spending[match]["support"][
+                                        old_index
+                                    ] = pick(result, SCHEDULE_E_FIELDS)
+                                    outside_spending[match]["support_total"] += result[
+                                        "expenditure_amount"
+                                    ]
+                                else:
+                                    outside_spending[match]["support"].append(
+                                        pick(result, SCHEDULE_E_FIELDS)
+                                    )
+                                    outside_spending[match]["support_total"] += result[
+                                        "expenditure_amount"
+                                    ]
+                            elif result["support_oppose_indicator"] == "O":
+                                if amendment:
+                                    old_index = next(
+                                        i
+                                        for i, item in enumerate(
+                                            outside_spending[match]["oppose"]
+                                        )
+                                        if item["transaction_id"]
+                                        == result["transaction_id"]
+                                    )
+                                    outside_spending[match][
+                                        "oppose_total"
+                                    ] -= outside_spending[match]["oppose"][old_index][
+                                        "expenditure_amount"
+                                    ]
+                                    outside_spending[match]["oppose"][old_index] = pick(
+                                        result, SCHEDULE_E_FIELDS
+                                    )
+                                    outside_spending[match]["oppose_total"] += result[
+                                        "expenditure_amount"
+                                    ]
+                                else:
+                                    outside_spending[match]["oppose"].append(
+                                        pick(result, SCHEDULE_E_FIELDS)
+                                    )
+                                    outside_spending[match]["oppose_total"] += result[
+                                        "expenditure_amount"
+                                    ]
+
+                        else:
+                            logging.error(
+                                f"Couldn't find candidate for outside expenditure: {candidate_id}"
+                            )
+                            print(
+                                f"Couldn't find candidate for outside expenditure: {candidate_id}"
+                            )
+
+                    # Fetch another page if needed
+                    if result_count <= candidate_data["pagination"]["count"]:
+                        last_expenditure_date = candidate_data["pagination"][
+                            "last_indexes"
+                        ]["last_expenditure_date"]
+                        last_index = candidate_data["pagination"]["last_indexes"][
+                            "last_index"
+                        ]
+                    else:
+                        break
+
             for candidate_name, candidate_spending in outside_spending.items():
                 state_data[race_id]["candidates"][candidate_name][
                     "outside_spending"

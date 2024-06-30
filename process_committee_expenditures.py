@@ -83,16 +83,20 @@ def process_expenditures(db):
     db.client.collection("expenditures").document("states").set(states)
 
     # Get most recent for committee, all
-    most_recent_all = sort_and_slice(all_expenditures.values())
+    most_recent_all = [x["uid"] for x in sort_and_slice(all_expenditures.values())]
     most_recent_by_committee = {}
 
     committee_ids = [committee["id"] for committee in db.committees.values()]
     for committee_id in committee_ids:
-        most_recent_by_committee[committee_id] = sort_and_slice(
-            filter(
-                lambda x: x["committee_id"] == committee_id, all_expenditures.values()
+        most_recent_by_committee[committee_id] = [
+            x["uid"]
+            for x in sort_and_slice(
+                filter(
+                    lambda x: x["committee_id"] == committee_id,
+                    all_expenditures.values(),
+                )
             )
-        )
+        ]
     db.client.collection("expenditures").document("recent").set(
         {
             "all": most_recent_all,

@@ -79,7 +79,7 @@ def get_expenditure_race_type(expenditure, races):
         # If the expenditure doesn't have an election type (as with efiled expenditures), we have to try to figure it
         # out from the date.
         expenditure_date = expenditure.get(
-            "expenditure_date", expenditure.get("dissemination_date", None)
+            "dissemination_date", expenditure.get("expenditure_date", None)
         )
         if expenditure_date is None:
             return None
