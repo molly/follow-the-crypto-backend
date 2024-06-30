@@ -15,45 +15,87 @@ def sort_and_slice(lst, length=10):
     )[:length]
 
 
-def process_recent_expenditures(db):
-    all_expenditures = []
-    expenditures_by_committee = {}
-    expenditures_by_state = {}
+def get_race_name(expenditure):
+    race = "{candidate_office_state}-{candidate_office}".format(**expenditure)
+    if (
+        expenditure["candidate_office_district"]
+        and int(expenditure["candidate_office_district"]) != 0
+    ):
+        race += "-" + expenditure["candidate_office_district"]
+    return race
 
-    recorded_state_expenditures = db.client.collection("expendituresByState").stream()
-    for doc in recorded_state_expenditures:
-        state, state_data = doc.id, doc.to_dict()
-        for committee_id in state_data["by_committee"].keys():
-            for expenditure in state_data["by_committee"][committee_id]["expenditures"]:
-                all_expenditures.append(expenditure)
 
-                if committee_id not in expenditures_by_committee:
-                    expenditures_by_committee[committee_id] = []
-                expenditures_by_committee[committee_id].append(expenditure)
-
-                if state not in expenditures_by_state:
-                    expenditures_by_state[state] = []
-                expenditures_by_state[state].append(expenditure)
-
-    db.client.collection("expenditures").document("all").set(
-        {
-            "recent": sort_and_slice(all_expenditures, 25),
-        },
-        merge=True,
+def process_expenditures(db):
+    all_expenditures = (
+        db.client.collection("expenditures").document("all").get().to_dict()
     )
+    states = {}
+    for uid, expenditure in all_expenditures.items():
+        race = get_race_name(expenditure)
+        committee_id = expenditure["committee_id"]
+        state = expenditure["candidate_office_state"]
 
-    for committee_id, expenditures in expenditures_by_committee.items():
-        db.client.collection("expenditures").document("committee").set(
-            {
-                committee_id: {"recent": sort_and_slice(expenditures)},
-            },
-            merge=True,
-        )
+        # Initialize state and set total
+        if state not in states:
+            states[state] = {
+                "total": expenditure["expenditure_amount"],
+                "by_committee": {},
+                "by_race": {},
+            }
+        else:
+            states[state]["total"] = round(
+                states[state]["total"] + expenditure["expenditure_amount"], 2
+            )
 
-    for state, expenditures in expenditures_by_state.items():
-        db.client.collection("expendituresByState").document(state).set(
-            {
-                "recent": sort_and_slice(expenditures),
-            },
-            merge=True,
+        # Initialize committee and record
+        if committee_id not in states[state]["by_committee"]:
+            states[state]["by_committee"][committee_id] = {
+                "total": expenditure["expenditure_amount"],
+                "expenditures": [uid],
+            }
+        else:
+            states[state]["by_committee"][committee_id]["total"] = round(
+                states[state]["by_committee"][committee_id]["total"]
+                + expenditure["expenditure_amount"],
+                2,
+            )
+            states[state]["by_committee"][committee_id]["expenditures"].append(uid)
+
+        # Initialize race and record
+        if race not in states[state]["by_race"]:
+            states[state]["by_race"][race] = {
+                "total": expenditure["expenditure_amount"],
+                "details": {
+                    "candidate_office": expenditure["candidate_office"],
+                    "candidate_office_district": expenditure[
+                        "candidate_office_district"
+                    ],
+                },
+                "expenditures": [uid],
+            }
+        else:
+            states[state]["by_race"][race]["total"] = round(
+                states[state]["by_race"][race]["total"]
+                + expenditure["expenditure_amount"],
+                2,
+            )
+            states[state]["by_race"][race]["expenditures"].append(uid)
+    db.client.collection("expenditures").document("states").set(states)
+
+    # Get most recent for committee, all
+    most_recent_all = sort_and_slice(all_expenditures.values())
+    most_recent_by_committee = {}
+
+    committee_ids = [committee["id"] for committee in db.committees.values()]
+    for committee_id in committee_ids:
+        most_recent_by_committee[committee_id] = sort_and_slice(
+            filter(
+                lambda x: x["committee_id"] == committee_id, all_expenditures.values()
+            )
         )
+    db.client.collection("expenditures").document("recent").set(
+        {
+            "all": most_recent_all,
+            "by_committee": most_recent_by_committee,
+        }
+    )

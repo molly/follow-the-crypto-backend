@@ -51,3 +51,28 @@ def get_first_last_name(common_name):
     if re.match("^([IVX]+|[SJ]r.?)$", last_name):
         last_name = name_parts[-2]
     return first_name, last_name
+
+
+def get_expenditure_race_type(expenditure):
+    election_type = expenditure.get("election_type", None)
+    if election_type is None:
+        # If the expenditure doesn't have an election type (as with efiled expenditures), we have to try to figure it
+        # out later by comparing dates.
+        return None
+    else:
+        election_type = election_type[0]
+    if election_type == "G":
+        return "general"
+    if election_type == "P":
+        return "primary"
+    if election_type == "R":
+        return "primary_runoff"
+    if election_type == "C":
+        return "convention"
+    if election_type == "S":
+        return "special"
+    if election_type == "O":
+        return "other"
+    else:
+        print("Unknown election type: " + election_type)
+        return election_type

@@ -1,5 +1,5 @@
 import logging
-from utils import FEC_fetch, pick
+from utils import FEC_fetch, pick, get_expenditure_race_type
 
 SCHEDULE_E_FIELDS = [
     "expenditure_amount",
@@ -11,6 +11,7 @@ SCHEDULE_E_FIELDS = [
     "category_code_full",
     "committee_id",
     "pdf_url",
+    "subrace",
 ]
 
 
@@ -54,6 +55,7 @@ def update_candidate_outside_spending(db):
                         if result["memoed_subtotal"]:
                             # Avoid double-counting memoed items
                             continue
+                        result["subrace"] = get_expenditure_race_type(result)
                         candidate_id = result["candidate_id"]
                         match = next(
                             candidate["common_name"]

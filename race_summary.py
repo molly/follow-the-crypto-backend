@@ -70,36 +70,47 @@ def get_last_index_with_donation(sorted_candidates, candidates_data):
     return -1
 
 
-def get_expenditure_race_type(expenditure):
+def get_expenditure_race_type(expenditure, races):
+    subrace = expenditure.get("subrace", None)
+    if subrace is not None:
+        return subrace
     election_type = expenditure.get("election_type", None)
     if election_type is None:
+        # If the expenditure doesn't have an election type (as with efiled expenditures), we have to try to figure it
+        # out from the date.
+        expenditure_date = expenditure.get(
+            "expenditure_date", expenditure.get("dissemination_date", None)
+        )
+        if expenditure_date is None:
+            return None
+        for race in races:
+            for candidate in race["candidates"]:
+                if compare_names(expenditure["candidate_last_name"], candidate["name"]):
+                    race_date = race.get("date", None)
+                    if race_date and race_date >= expenditure_date:
+                        expenditure["subrace"] = race["type"]
+                        return race["type"]
         return None
-    else:
-        election_type = election_type[0]
-    if election_type == "G":
-        return "general"
-    if election_type == "P":
-        return "primary"
-    if election_type == "R":
-        return "primary_runoff"
-    if election_type == "C":
-        return "convention"
-    if election_type == "S":
-        return "special"
-    return None
 
 
 def summarize_races(db):
     race_docs = db.client.collection("raceDetails").stream()
+    all_expenditures = (
+        db.client.collection("expenditures").document("all").get().to_dict()
+    )
+    states_expenditures = (
+        db.client.collection("expenditures").document("states").get().to_dict()
+    )
     for doc in race_docs:
         state, state_data = doc.id, doc.to_dict()
-        all_expenditures = (
-            db.client.collection("expendituresByState").document(state).get().to_dict()
-        )
-
+        races_expenditures = states_expenditures.get(state, {}).get("by_race", {})
         # Iterate through each race in each state
         for race_id, race_data in state_data.items():
             race_id_split = race_id.split("-")
+            full_race_id = "{}-{}".format(state, race_id)
+            race_expenditures = races_expenditures.get(full_race_id, {}).get(
+                "expenditures", []
+            )
 
             # Create set for each unique candidate in any sub-race in this race. This will always be equivalent to
             # Object.keys(candidates_data) and is just maintained for convenience.
@@ -299,11 +310,10 @@ def summarize_races(db):
                                 "type"
                             ]
 
-            expenditures = all_expenditures["by_race"][f"{state}-{race_id}"][
-                "expenditures"
-            ]
             # Iterate through each expenditure in this race
-            for expenditure in expenditures:
+            for expenditure_id in race_expenditures:
+                expenditure = all_expenditures[expenditure_id]
+
                 # Try to find the candidate this expenditure is associated with
                 try:
                     # Ideally this will match their FEC_name
@@ -314,7 +324,7 @@ def summarize_races(db):
                     ks = {
                         key
                         for key in names
-                        if expenditure["candidate_last_name"] in key
+                        if expenditure["candidate_last_name"].upper() in key
                     }
                     if len(ks) == 1:
                         k = ks.pop()
@@ -337,9 +347,16 @@ def summarize_races(db):
                     candidates_data[candidate_key]["expenditure_committees"] = set()
 
                 # Add the expenditure's sub-race to the candidate's list of expenditure_races
-                candidates_data[candidate_key]["expenditure_races"].add(
-                    get_expenditure_race_type(expenditure)
-                )
+                subrace = expenditure.get("subrace", None)
+                if not subrace:
+                    subrace = get_expenditure_race_type(expenditure, race_data["races"])
+                    if subrace:
+                        # Update the expenditure with the subrace now that we've calculated it
+                        db.client.collection("expenditures").document("all").update(
+                            {db.client.field_path(expenditure_id, "subrace"): subrace}
+                        )
+                candidates_data[candidate_key]["expenditure_races"].add(subrace)
+
                 # Add this expenditure's committee to the candidate's list of expenditure_committees
                 candidates_data[candidate_key]["expenditure_committees"].add(
                     expenditure["committee_id"]
