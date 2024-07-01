@@ -30,10 +30,14 @@ def process_expenditures(db):
         db.client.collection("expenditures").document("all").get().to_dict()
     )
     states = {}
+    all_parties = {"dem_oppose": 0, "dem_support": 0, "rep_oppose": 0, "rep_support": 0}
+    committees = {}
+    total = 0
     for uid, expenditure in all_expenditures.items():
         race = get_race_name(expenditure)
         committee_id = expenditure["committee_id"]
         state = expenditure["candidate_office_state"]
+        total += expenditure["expenditure_amount"]
 
         # Initialize state and set total
         if state not in states:
@@ -80,7 +84,46 @@ def process_expenditures(db):
                 2,
             )
             states[state]["by_race"][race]["expenditures"].append(uid)
+
+        # Record party support/oppose for all committees, and per-committee
+        if committee_id not in committees:
+            committees[committee_id] = {
+                "dem_support": 0,
+                "dem_oppose": 0,
+                "rep_support": 0,
+                "rep_oppose": 0,
+            }
+        if expenditure["support_oppose_indicator"] == "S":
+            if expenditure["candidate_party"] == "DEM":
+                committees[committee_id]["dem_support"] += expenditure[
+                    "expenditure_amount"
+                ]
+                all_parties["dem_support"] += expenditure["expenditure_amount"]
+            elif expenditure["candidate_party"] == "REP":
+                committees[committee_id]["rep_support"] += expenditure[
+                    "expenditure_amount"
+                ]
+                all_parties["rep_support"] += expenditure["expenditure_amount"]
+        elif expenditure["support_oppose_indicator"] == "O":
+            if expenditure["candidate_party"] == "DEM":
+                committees[committee_id]["dem_oppose"] += expenditure[
+                    "expenditure_amount"
+                ]
+                all_parties["dem_oppose"] += expenditure["expenditure_amount"]
+            elif expenditure["candidate_party"] == "REP":
+                committees[committee_id]["rep_oppose"] += expenditure[
+                    "expenditure_amount"
+                ]
+                all_parties["rep_oppose"] += expenditure["expenditure_amount"]
+
     db.client.collection("expenditures").document("states").set(states)
+    for committee_id, committee_data in committees.items():
+        db.client.collection("committees").document(committee_id).set(
+            {"by_party": committee_data}, merge=True
+        )
+    db.client.collection("expenditures").document("total").set(
+        {"total": round(total, 2)}
+    )
 
     # Get most recent for committee, all
     most_recent_all = [x["uid"] for x in sort_and_slice(all_expenditures.values())]
