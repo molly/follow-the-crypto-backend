@@ -41,16 +41,16 @@ def get_race_name(expenditure):
 
 def update_committee_expenditures(db):
     """
-    Fetch expenditures that have been processed by the FEC. Recent expenditures may not be included in this data, and
-    are fetched separately in update_recent_committee_expenditures.
+    Fetch processed transactions, and any transactions that have been efiled but not yet processed.
+    These are stored raw in expenditures.all, and processed later in process_committee_expenditures.py.
     """
     committee_ids = [committee["id"] for committee in db.committees.values()]
     transactions = {}
-
     last_index = None
     last_expenditure_date = None
     exp_count = 0
     for committee_id in committee_ids:
+        # First fetch processed expenditures
         while True:
             data = FEC_fetch(
                 "committee expenditures",
@@ -96,20 +96,7 @@ def update_committee_expenditures(db):
                     "last_expenditure_date"
                 ]
 
-    db.client.collection("expenditures").document("all").set(transactions)
-
-
-def update_recent_committee_expenditures(db):
-    """
-    There may be more recent expenditures that have not yet been processed. Fetch these. This function is
-    safe to re-run as often as needed, as it checks for duplicates before adding new contributions.
-    """
-    transactions = db.client.collection("expenditures").document("all").get().to_dict()
-    committee_ids = [committee["id"] for committee in db.committees.values()]
-
-    # Save these to pass to bot code
-    new_expenditures = []
-    for committee_id in committee_ids:
+        # Now fetch efiled expenditures that may have not yet been processed
         page = 1
         while True:
             data = FEC_fetch(
@@ -151,14 +138,23 @@ def update_recent_committee_expenditures(db):
                         )
                     ):
                         transactions[uid] = pick(exp, EXPENDITURE_FIELDS)
-                        new_expenditures.append(exp)
                 elif uid not in transactions:
                     transactions[uid] = pick(exp, EXPENDITURE_FIELDS)
-                    new_expenditures.append(exp)
 
             if page >= data["pagination"]["pages"]:
                 break
             else:
                 page += 1
 
+    # Diff with previously stored expenditures
+    old_transactions = (
+        db.client.collection("expenditures").document("all").get().to_dict()
+    )
+    old_transaction_ids = set(old_transactions.keys())
+    diff_ids = set(transactions.keys()).difference(old_transaction_ids)
+    new_transactions = {}
+    if diff_ids:
+        new_transactions = {x: transactions[x] for x in diff_ids}
+
     db.client.collection("expenditures").document("all").set(transactions)
+    return new_transactions

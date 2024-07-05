@@ -25,6 +25,7 @@ FIELDS = [
 
 
 def get_ads(db):
+    new_ads = {}
     ads_by_committee = {}
     gatc_to_fec = {}
     for c_id, committee in db.committees.items():
@@ -53,8 +54,33 @@ def get_ads(db):
             if isinstance(value, datetime.date):
                 value = value.isoformat()
             ad_details[field] = value
-        if ad_id in db.ads:
-            ad_details.update(db.ads[ad_id])
+        if ad_id in db.ads["google"]:
+            ad_details.update(db.ads["google"][ad_id])
         ad_details["fec_id"] = gatc_to_fec[gatc_id]
         ads_by_committee[gatc_to_fec[gatc_id]]["ads"][ad_id] = ad_details
-    db.client.collection("ads").document("google").set(ads_by_committee)
+        ads_by_committee[gatc_to_fec[gatc_id]]["ads"][ad_id]["type"] = "google"
+
+    image_ads = db.ads["images"]
+    for ind, ad in enumerate(image_ads):
+        image_ads[ind]["type"] = "image"
+        if ad["committee_id"] in ads_by_committee:
+            ads_by_committee[ad["committee_id"]]["ads"][ad["src"]] = ad
+        else:
+            ads_by_committee[ad["committee_id"]] = {"ads": {ad["ad_id"]: ad}}
+
+    old_ads = db.client.collection("ads").document("by_committee").get().to_dict()
+    for committee in ads_by_committee:
+        if committee not in old_ads:
+            new_ads[committee] = ads_by_committee[committee]["ads"]
+        else:
+            old_ad_ids = set(old_ads[committee]["ads"].keys())
+            for ad_id in ads_by_committee[committee]["ads"]:
+                if ad_id not in old_ad_ids:
+                    if committee not in new_ads:
+                        new_ads[committee] = {}
+                    new_ads[committee][ad_id] = ads_by_committee[committee]["ads"][
+                        ad_id
+                    ]
+
+    db.client.collection("ads").document("by_committee").set(ads_by_committee)
+    return new_ads

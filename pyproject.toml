@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "follow-the-crypto-backend"
+version = "0.1.0"
+description = ""
+authors = ["Molly White <molly.white5@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+google-cloud-logging = "^3.10.0"
+google-cloud = "^0.34.0"
+firebase-admin = "^6.5.0"
+Unidecode = "^1.3.8"
+selenium = "^4.22.0"
+humanize = "^4.9.0"
+backoff = "^2.2.1"
+requests = "^2.32.3"
+statistics = "^1.0.3.5"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

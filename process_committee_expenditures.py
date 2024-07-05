@@ -1,6 +1,3 @@
-import datetime
-
-
 def sort_and_slice(lst, length=10):
     def get_date(x):
         date = x.get("expenditure_date")
@@ -32,12 +29,19 @@ def process_expenditures(db):
     states = {}
     all_parties = {"dem_oppose": 0, "dem_support": 0, "rep_oppose": 0, "rep_support": 0}
     committees = {}
-    total = 0
+    totals = {
+        "all": 0,
+        "by_committee": {},
+    }
     for uid, expenditure in all_expenditures.items():
         race = get_race_name(expenditure)
         committee_id = expenditure["committee_id"]
         state = expenditure["candidate_office_state"]
-        total += expenditure["expenditure_amount"]
+        totals["all"] += expenditure["expenditure_amount"]
+        if committee_id not in totals["by_committee"]:
+            totals["by_committee"][committee_id] = expenditure["expenditure_amount"]
+        else:
+            totals["by_committee"][committee_id] += expenditure["expenditure_amount"]
 
         # Initialize state and set total
         if state not in states:
@@ -121,9 +125,7 @@ def process_expenditures(db):
         db.client.collection("committees").document(committee_id).set(
             {"by_party": committee_data}, merge=True
         )
-    db.client.collection("expenditures").document("total").set(
-        {"total": round(total, 2)}
-    )
+    db.client.collection("expenditures").document("total").set(totals)
 
     # Get most recent for committee, all
     most_recent_all = [x["uid"] for x in sort_and_slice(all_expenditures.values())]

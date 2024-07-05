@@ -1,10 +1,17 @@
 from utils import FEC_fetch, pick
 
-DISBURSEMENT_FIELDS = ["disbursement_amount", "disbursement_date", "pdf_url"]
+DISBURSEMENT_FIELDS = [
+    "disbursement_amount",
+    "disbursement_date",
+    "pdf_url",
+    "recipient_committee_id",
+    "transaction_id",
+]
 
 
 def update_committee_disbursements(db):
     committees = db.client.collection("committees").stream()
+    new_disbursements = {}
     for committee_snapshot in committees:
         committee = committee_snapshot.to_dict()
         committee_id = committee["id"]
@@ -53,6 +60,41 @@ def update_committee_disbursements(db):
                     ]
 
             if disbursements:
-                db.client.collection("committees").document(committee_id).set(
-                    {"disbursements_by_committee": disbursements}, merge=True
-                )
+                old_disbursements = committee.get("disbursements_by_committee", {})
+                for recipient_committee_id in disbursements:
+                    if recipient_committee_id not in old_disbursements:
+                        # All disbursements to this committee are new, add them to new_disbursements
+                        for disbursement in disbursements[recipient_committee_id][
+                            "disbursements"
+                        ]:
+                            if committee_id not in new_disbursements:
+                                new_disbursements[committee_id] = {}
+                            new_disbursements[committee_id][
+                                disbursement["transaction_id"]
+                            ] = disbursement
+                    else:
+                        old_disbursement_ids = set(
+                            [
+                                d["transaction_id"]
+                                for d in old_disbursements[recipient_committee_id][
+                                    "disbursements"
+                                ]
+                            ]
+                        )
+                        for disbursement in disbursements[recipient_committee_id][
+                            "disbursements"
+                        ]:
+                            if (
+                                disbursement["transaction_id"]
+                                not in old_disbursement_ids
+                            ):
+                                if committee_id not in new_disbursements:
+                                    new_disbursements[committee_id] = {}
+                                new_disbursements[committee_id][
+                                    disbursement["transaction_id"]
+                                ] = disbursement
+
+            db.client.collection("committees").document(committee_id).set(
+                {"disbursements_by_committee": disbursements}, merge=True
+            )
+    return new_disbursements

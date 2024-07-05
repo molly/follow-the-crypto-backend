@@ -54,16 +54,15 @@ def should_omit(contrib, other_contribs, ids_to_omit):
 
 def update_committee_contributions(db):
     """
-    This wipes out the existing raw contributions and re-fetches them all. It only fetches contributions that are
-    marked as "processed" by the FEC, so for completeness, unprocessed contributions need to be fetched and handled
-    by the hourly update.
-
     This stores contributions (with a trimmed set of fields) in the "rawContributions" collection in Firestore. Those
     contributions will later be processed in process_committee_contributions.py into a format that saves computation
     on the frontend (doing rollups, redactions, etc.)
+
+    This function fetches both processed and efiled contributions.
     """
 
     committee_ids = [committee["id"] for committee in db.committees.values()]
+    new_contributions = {}
     for committee_id in committee_ids:
         contributions = []
         last_index = None
@@ -76,7 +75,7 @@ def update_committee_contributions(db):
             else set()
         )
 
-        # Fetch processed contributions
+        # First fetch processed contributions
         while True:
             data = FEC_fetch(
                 "committee contributions",
@@ -114,44 +113,9 @@ def update_committee_contributions(db):
                     "last_contribution_receipt_date"
                 ]
 
-        db.client.collection("rawContributions").document(committee_id).set(
-            {"transactions": contributions}
-        )
-
-
-def update_recent_committee_contributions(db):
-    """
-    There may be more recent contributions that have not yet been processed. Fetch these.
-    This does not wipe out the rawContributions database as with the update_committee_contributions, but is still
-    safe to re-run as often as needed, as it checks for duplicates before adding new contributions.
-    """
-    committee_ids = [committee["id"] for committee in db.committees.values()]
-
-    # Save new contributions to pass to bot code
-    new_contributions = []
-
-    for committee_id in committee_ids:
-        contributions = (
-            db.client.collection("rawContributions")
-            .document(committee_id)
-            .get()
-            .to_dict()
-        )
-
-        contrib_ids = set(
-            transaction["transaction_id"]
-            for transaction in contributions["transactions"]
-        )
-
+        # Now fetch efiled contributions that may have not yet been processed
         page = 1
         contribs_count = 0
-        ids_to_omit = (
-            set(db.duplicate_contributions[committee_id])
-            if committee_id in db.duplicate_contributions
-            else set()
-        )
-
-        # Fetch unprocessed contributions that were efiled
         while True:
             data = FEC_fetch(
                 "unprocessed committee contributions",
@@ -184,9 +148,7 @@ def update_recent_committee_contributions(db):
 
                 # When the contributor name is a company, it has trailing commas. Strip them.
                 picked["contributor_name"] = picked["contributor_name"].strip(",")
-
-                new_contributions.append(picked)
-                contributions["transactions"].append(picked)
+                contributions.append(picked)
 
             # Fetch more pages if they exist, or break
             if page >= data["pagination"]["pages"]:
@@ -194,7 +156,22 @@ def update_recent_committee_contributions(db):
             else:
                 page += 1
 
+        # Diff with previously stored transactions and store any new transactions
+        old = (
+            db.client.collection("rawContributions")
+            .document(committee_id)
+            .get()
+            .to_dict()
+        )
+        if old:
+            old_ids = set([x["transaction_id"] for x in old["transactions"]])
+            diff_ids = contrib_ids.difference(old_ids)
+            if diff_ids:
+                for diff_id in diff_ids:
+                    new_contributions[diff_id] = next(
+                        x for x in contributions if x["transaction_id"] == diff_id
+                    )
         db.client.collection("rawContributions").document(committee_id).set(
-            contributions
+            {"transactions": contributions}
         )
     return new_contributions

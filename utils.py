@@ -1,8 +1,8 @@
 import backoff
 import logging
+import os
 import re
 import requests
-from msecrets import FEC_API_KEY
 
 logging.getLogger("backoff").addHandler(logging.StreamHandler())
 
@@ -35,7 +35,7 @@ def FEC_fetch(description, url, params={}):
         url,
         params={
             **params,
-            "api_key": FEC_API_KEY,
+            "api_key": os.environ["FEC_API_KEY"],
         },
         timeout=30,
     )
