@@ -47,7 +47,10 @@ def should_omit(contrib, other_contribs, ids_to_omit):
     if contrib["transaction_id"] in other_contribs:
         # Duplicate of a transaction we've already encountered
         return True
-    if contrib["memo_text"] and "ATTRIBUTION" in contrib["memo_text"].upper():
+    if (
+        "ATTRIBUTION" in (contrib.get("memo_text", "") or "").upper()
+        or "ATTRIBUTION" in (contrib.get("receipt_type_full", "") or "").upper()
+    ):
         return True
     return False
 

@@ -11,6 +11,7 @@ SHARED_CONTRIBUTION_FIELDS = [
     "entity_type",
     "contributor_aggregate_ytd",
     "redacted",
+    "link",
 ]
 
 CONTRIBUTION_FIELDS = SHARED_CONTRIBUTION_FIELDS + [
@@ -76,6 +77,27 @@ def process_contribution(contrib, db, donorMap):
     elif group in db.company_aliases:
         group = db.company_aliases[group]
 
+    link = None
+    for company in db.companies.values():
+        if company["name"].upper() == group or any(
+            alias.upper() == group for alias in company.get("aliases", [])
+        ):
+            link = "/companies/" + company["id"]
+            break
+    if not link:
+        for committee in db.committees.values():
+            if committee["name"].upper() == group:
+                link = "/committees/" + committee["id"]
+                break
+    if not link:
+        for individual in db.individuals.values():
+            if individual["name"].upper() == group:
+                link = "/individuals/" + individual["id"]
+                break
+
+    if link:
+        contrib["link"] = link
+
     # Add group to map if the group isn't already in there
     if group not in donorMap["groups"]:
         donorMap["groups"][group] = {
@@ -83,6 +105,8 @@ def process_contribution(contrib, db, donorMap):
             "rollup": {},
             "total": 0,
         }
+        if link:
+            donorMap["groups"][group]["link"] = link
 
     if contrib["line_number"] == "12" or contrib["line_number"].lower() == "11c":
         # This was a transfer from another committee and shouldn't be double counted

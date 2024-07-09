@@ -44,6 +44,21 @@ def FEC_fetch(description, url, params={}):
         return r.json()
 
 
+def openSecrets_fetch(description, url, params={}):
+    r = requests.get(
+        url,
+        params={
+            **params,
+            "output": "json",
+            "apikey": os.environ["OS_API_KEY"],
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
+    if r.status_code == 200:
+        return r.json()
+
+
 def get_first_last_name(common_name):
     name_parts = common_name.split(" ")
     first_name = name_parts[0]

@@ -128,7 +128,7 @@ def process_expenditures(db):
     db.client.collection("expenditures").document("total").set(totals)
 
     # Get most recent for committee, all
-    most_recent_all = [x["uid"] for x in sort_and_slice(all_expenditures.values())]
+    most_recent_all = [x["uid"] for x in sort_and_slice(all_expenditures.values(), 50)]
     most_recent_by_committee = {}
 
     committee_ids = [committee["id"] for committee in db.committees.values()]
