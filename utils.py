@@ -18,6 +18,11 @@ def fatal_code(e):
         return False
 
 
+def chunk(lst, chunk_size=10):
+    for i in range(0, len(lst), chunk_size):
+        yield lst[i : i + chunk_size]
+
+
 @backoff.on_exception(
     backoff.constant,
     (

@@ -56,6 +56,8 @@ def update_spending_by_company(db):
     for str_id, company in db.companies.items():
         # Sync companies with the constants dict
         company_id = company["os_id"]
+        if company_id == "potter-ventures":
+            print("h")
         data = openSecrets_fetch(
             "company spending",
             "http://www.opensecrets.org/api/?method=orgSummary",

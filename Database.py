@@ -18,6 +18,7 @@ class Database:
         self.ads = None
         self.companies = None
         self.individuals = None
+        self.committee_affiliations = None
 
     def get_constants(self):
         constants = self.client.collection("constants")
@@ -45,3 +46,6 @@ class Database:
         self.ads = constants.document("ads").get().to_dict()
         self.companies = constants.document("companies").get().to_dict()
         self.individuals = constants.document("individuals").get().to_dict()
+        self.committee_affiliations = (
+            constants.document("committeeAffiliations").get().to_dict()
+        )
