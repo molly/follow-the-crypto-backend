@@ -22,6 +22,7 @@ to_skip = {
     "Christian Robbins",
     "Alexander Dodenhoff",
     "Paul Briscoe",
+    "Antonio Alvarez",
 }
 
 

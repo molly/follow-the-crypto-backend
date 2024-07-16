@@ -371,13 +371,11 @@ def process_individual_contributions(db):
                     party = committee["party"]
                 else:
                     parties = [
-                        c["party"] for c in committee["candidate_details"].values()
+                        c.get("party")
+                        for c in committee["candidate_details"].values()
+                        if c.get("party") is not None
                     ]
-                    if (
-                        len(set(parties)) == 1
-                        and parties[0] is not None
-                        and not parties[0].startswith("N")
-                    ):
+                    if len(set(parties)) == 1 and not parties[0].startswith("N"):
                         party = parties[0]
                 if party not in party_summary:
                     party_summary[party] = 0

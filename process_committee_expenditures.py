@@ -27,7 +27,17 @@ def process_expenditures(db):
         db.client.collection("expenditures").document("all").get().to_dict()
     )
     states = {}
-    all_parties = {"dem_oppose": 0, "dem_support": 0, "rep_oppose": 0, "rep_support": 0}
+    new_opposition_spending = set()
+    all_parties = {
+        "dem_oppose": 0,
+        "dem_support": 0,
+        "rep_oppose": 0,
+        "rep_support": 0,
+        "oppose_benefit_dem": 0,
+        "oppose_benefit_rep": 0,
+        "oppose_benefit_mix": 0,  # Both parties benefit from opposing
+        "oppose_benefit_unk": 0,  # Unknown who benefits from opposing
+    }
     committees = {}
     totals = {
         "all": 0,
@@ -96,6 +106,10 @@ def process_expenditures(db):
                 "dem_oppose": 0,
                 "rep_support": 0,
                 "rep_oppose": 0,
+                "oppose_benefit_dem": 0,
+                "oppose_benefit_rep": 0,
+                "oppose_benefit_mix": 0,
+                "oppose_benefit_unk": 0,
             }
         if expenditure["support_oppose_indicator"] == "S":
             if expenditure["candidate_party"] == "DEM":
@@ -119,6 +133,35 @@ def process_expenditures(db):
                     "expenditure_amount"
                 ]
                 all_parties["rep_oppose"] += expenditure["expenditure_amount"]
+            if expenditure["candidate_id"] in db.opposition_spending:
+                party = db.opposition_spending[expenditure["candidate_id"]]
+                if party == "DEM":
+                    committees[committee_id]["oppose_benefit_dem"] += expenditure[
+                        "expenditure_amount"
+                    ]
+                    all_parties["oppose_benefit_dem"] += expenditure[
+                        "expenditure_amount"
+                    ]
+                elif party == "REP":
+                    committees[committee_id]["oppose_benefit_rep"] += expenditure[
+                        "expenditure_amount"
+                    ]
+                    all_parties["oppose_benefit_rep"] += expenditure[
+                        "expenditure_amount"
+                    ]
+                elif party == "MIX":
+                    committees[committee_id]["oppose_benefit_mix"] += expenditure[
+                        "expenditure_amount"
+                    ]
+                    all_parties["oppose_benefit_mix"] += expenditure[
+                        "expenditure_amount"
+                    ]
+            else:
+                committees[committee_id]["oppose_benefit_unk"] += expenditure[
+                    "expenditure_amount"
+                ]
+                all_parties["oppose_benefit_unk"] += expenditure["expenditure_amount"]
+                new_opposition_spending.add(expenditure["candidate_id"])
 
     db.client.collection("expenditures").document("states").set(states)
     for committee_id, committee_data in committees.items():
@@ -148,3 +191,5 @@ def process_expenditures(db):
             "by_committee": most_recent_by_committee,
         }
     )
+    db.client.collection("expenditures").document("by_party").set(all_parties)
+    return new_opposition_spending
