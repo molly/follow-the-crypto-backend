@@ -4,11 +4,46 @@ from states import SINGLE_MEMBER_STATES
 from utils import chunk, FEC_fetch, pick
 
 
+def all_unique(numbers):
+    """
+    Check if all integers in the array are unique.
+    """
+    return len(numbers) == len(set(numbers))
+
+
 def get_description(contrib):
     desc = contrib.get("memo_text", "")
     if not desc:
         desc = contrib.get("receipt_type_full", "")
+    if not desc:
+        return ""
     return desc
+
+
+def remove_efiled(contribs, remove_all=False):
+    # If remove_all is true, this will remove all efiled contributions.
+    # Otherwise, it will only remove an efiled contribution if there are only two options that are otherwise identical
+    if (
+        not remove_all
+        and len(contribs) == 2
+        and contribs[0]["contribution_receipt_amount"]
+        == contribs[1]["contribution_receipt_amount"]
+    ):
+        # Identical contributions, but one was efiled. In this case, prefer the non-efiled one.
+        if contribs[0].get("efiled") and not contribs[1].get("efiled"):
+            return [contribs[1]]
+        elif contribs[1].get("efiled") and not contribs[0].get("efiled"):
+            return [contribs[0]]
+    elif remove_all:
+        return [c for c in contribs if not c.get("efiled")]
+    return contribs
+
+
+def diff(a, b):
+    """
+    Diff two dicts
+    """
+    return {k: b[k] for k in set(b) - set(a)}
 
 
 def dedupe_by_memo(group):
@@ -83,93 +118,134 @@ def attribute_earmarked(contrib):
     return contrib
 
 
+def dedupe_by_ids(group):
+    grouped_by_transaction_id = {}
+    for contrib in group:
+        if contrib["transaction_id"] not in grouped_by_transaction_id:
+            grouped_by_transaction_id[contrib["transaction_id"]] = []
+        grouped_by_transaction_id[contrib["transaction_id"]].append(contrib)
+
+    deduped_by_id = []
+    for contribs in grouped_by_transaction_id.values():
+        if len(contribs) == 1:
+            deduped_by_id.append(contribs[0])
+            continue
+        deduped = remove_efiled(contribs)
+        if len(deduped) == 1:
+            deduped_by_id.append(deduped[0])
+            continue
+
+        # If the transaction has been amended, get the most recent. Hopefully that will leave us with just one.
+        amendment_lengths = [len(x["amendment_chain"]) for x in contribs]
+        longest = max(amendment_lengths)
+        contribs = [x for x in contribs if len(x["amendment_chain"]) == longest]
+        if len(contribs) == 1:
+            deduped_by_id.append(contribs[0])
+            continue
+        else:
+            # See if one of the contributions was an earmarked one, in which case it should be removed.
+            reattributed = [
+                x for x in contribs if "EARMARK" not in get_description(x).upper()
+            ]
+            if len(reattributed) < len(contribs):
+                contribs = remove_efiled(reattributed)
+                if len(contribs) == 1:
+                    deduped_by_id.append(contribs[0])
+                    continue
+            contribs = reattributed
+
+        # Last ditch, remove all efiled contribs
+        contribs = remove_efiled(contribs, True)
+        deduped_by_id.append(contribs[0])
+
+    return deduped_by_id
+
+
 def process_contribution_group(group):
     if len(group) == 1:
         return [attribute_earmarked(group[0])]
-    else:
-        contrib_24t = []
-        contrib_15 = []
-        contrib_15e = []
-        contrib_15x = []
-        contrib_rest = []
-        for contrib in group:
-            receipt_type = contrib.get("receipt_type")
-            if not receipt_type:
+    group = dedupe_by_ids(group)
+    if len(group) == 1:
+        return [attribute_earmarked(group[0])]
+    contrib_24t = []
+    contrib_15 = []
+    contrib_15e = []
+    contrib_15x = []
+    contrib_rest = []
+    for contrib in group:
+        receipt_type = contrib.get("receipt_type")
+        if not receipt_type:
+            contrib_rest.append(contrib)
+        else:
+            if receipt_type == "24T":
+                contrib_24t.append(contrib)
+            elif receipt_type == "15":
+                contrib_15.append(contrib)
+            elif receipt_type == "15E":
+                contrib_15e.append(contrib)
+            elif receipt_type.startswith("15"):
+                contrib_15x.append(contrib)
+            else:
                 contrib_rest.append(contrib)
-            else:
-                if receipt_type == "24T":
-                    contrib_24t.append(contrib)
-                elif receipt_type == "15":
-                    contrib_15.append(contrib)
-                elif receipt_type == "15E":
-                    contrib_15e.append(contrib)
-                elif receipt_type.startswith("15"):
-                    contrib_15x.append(contrib)
-                else:
-                    contrib_rest.append(contrib)
 
-        sum_24t = sum([x["contribution_receipt_amount"] for x in contrib_24t])
-        sum_15 = sum([x["contribution_receipt_amount"] for x in contrib_15])
-        sum_15e = sum([x["contribution_receipt_amount"] for x in contrib_15e])
-        sum_15x = sum([x["contribution_receipt_amount"] for x in contrib_15x])
-        sum_rest = sum([x["contribution_receipt_amount"] for x in contrib_rest])
+    sum_24t = sum([x["contribution_receipt_amount"] for x in contrib_24t])
+    sum_15 = sum([x["contribution_receipt_amount"] for x in contrib_15])
+    sum_15e = sum([x["contribution_receipt_amount"] for x in contrib_15e])
+    sum_15x = sum([x["contribution_receipt_amount"] for x in contrib_15x])
+    sum_rest = sum([x["contribution_receipt_amount"] for x in contrib_rest])
 
-        contribs_to_keep = []
+    contribs_to_keep = []
 
-        if sum_24t == sum_15 == sum_15e == sum_15x == sum_rest == 0:
-            totals = {}
-            for contrib in group:
-                if contrib["committee_id"] not in totals:
-                    totals[contrib["committee_id"]] = 0
-                totals[contrib["committee_id"]] += contrib[
-                    "contribution_receipt_amount"
-                ]
-                if all([x == 0 for x in totals.values()]):
-                    # Just redesignation(s), can ignore
-                    return []
-            else:
-                print(f"Encountered an unexpected contributions group.")
-                print(group)
-                logging.error(
-                    f"Encountered an unexpected contributions group.", {"group": group}
-                )
-
-        if not contrib_24t and not contrib_15 and not contrib_15e:
-            # No earmarked contributions, these are just multiple contributions on the same day
-            return contrib_15x + contrib_rest
-
-        if contrib_24t:
-            if sum_24t != sum_15 and sum_24t != sum_15e and sum_24t != sum_15x:
-                contribs_to_keep.extend(dedupe_by_memo(group))
-                return contribs_to_keep
-            else:
-                # Drop 24t contribution, fall through to 15 handling
-                pass
-
-        if contrib_15 or contrib_15e or contrib_15x:
-            if sum_15e == 0 and sum_15 > 0 and sum_15 == sum_15x:
-                contribs_to_keep.extend(contrib_15x + contrib_rest)
-            elif sum_15 == 0 and sum_15e > 0 and sum_15e == sum_15x:
-                contribs_to_keep.extend(contrib_15x + contrib_rest)
-            elif not contrib_15x:
-                if not contrib_15e:
-                    contribs_to_keep.extend(contrib_15 + contrib_rest)
-                elif not contrib_15:
-                    contribs_to_keep.extend(contrib_15e + contrib_rest)
-                else:
-                    contribs_to_keep.extend(dedupe_by_memo(group))
-                    return contribs_to_keep
-            else:
-                contribs_to_keep.extend(dedupe_by_memo(group))
-                return contribs_to_keep
+    if sum_24t == sum_15 == sum_15e == sum_15x == sum_rest == 0:
+        totals = {}
+        for contrib in group:
+            if contrib["committee_id"] not in totals:
+                totals[contrib["committee_id"]] = 0
+            totals[contrib["committee_id"]] += contrib["contribution_receipt_amount"]
+            if all([x == 0 for x in totals.values()]):
+                # Just redesignation(s), can ignore
+                return []
         else:
             print(f"Encountered an unexpected contributions group.")
-            print(group)
             logging.error(
                 f"Encountered an unexpected contributions group.", {"group": group}
             )
 
-        return contribs_to_keep
+    if not contrib_24t and not contrib_15 and not contrib_15e:
+        # No earmarked contributions, these are just multiple contributions on the same day
+        return contrib_15x + contrib_rest
+
+    if contrib_24t:
+        if sum_24t != sum_15 and sum_24t != sum_15e and sum_24t != sum_15x:
+            contribs_to_keep.extend(dedupe_by_memo(group))
+            return contribs_to_keep
+        else:
+            # Drop 24t contribution, fall through to 15 handling
+            pass
+
+    if contrib_15 or contrib_15e or contrib_15x:
+        if sum_15e == 0 and sum_15 > 0 and sum_15 == sum_15x:
+            contribs_to_keep.extend(contrib_15x + contrib_rest)
+        elif sum_15 == 0 and sum_15e > 0 and sum_15e == sum_15x:
+            contribs_to_keep.extend(contrib_15x + contrib_rest)
+        elif not contrib_15x:
+            if not contrib_15e:
+                contribs_to_keep.extend(contrib_15 + contrib_rest)
+            elif not contrib_15:
+                contribs_to_keep.extend(contrib_15e + contrib_rest)
+            else:
+                contribs_to_keep.extend(dedupe_by_memo(group))
+                return contribs_to_keep
+        else:
+            contribs_to_keep.extend(dedupe_by_memo(group))
+            return contribs_to_keep
+    else:
+        print(f"Encountered an unexpected contributions group.")
+        logging.error(
+            f"Encountered an unexpected contributions group.", {"group": group}
+        )
+
+    return contribs_to_keep
 
 
 def get_missing_recipient_data(recipients, db):
@@ -207,10 +283,16 @@ def get_missing_recipient_data(recipients, db):
             }
             del recipients[recipient_id]["needs_data"]
         if recipient_id in db.committee_affiliations:
-            recipients[recipient_id] = {
-                **recipients[recipient_id],
-                **db.committee_affiliations[recipient_id],
-            }
+            try:
+                recipients[recipient_id] = {
+                    **recipients.get(recipient_id, {}),
+                    **db.committee_affiliations.get(recipient_id, {}),
+                }
+            except Exception as e:
+                logging.error(
+                    "Malformed committee affiliation", {"recipient_id": recipient_id}
+                )
+                print(f"Malformed committee affiliation: {recipient_id}")
         if recipients[recipient_id].get("candidate_ids") is not None:
             for candidate_id in recipients[recipient_id]["candidate_ids"]:
                 if (
@@ -297,7 +379,11 @@ def process_individual_contributions(db):
         for contrib in deduped:
             recipient = contrib["committee_id"]
             if recipient not in grouped_by_recipient:
-                grouped_by_recipient[recipient] = {"contributions": [], "total": 0}
+                grouped_by_recipient[recipient] = {
+                    "contributions": [],
+                    "total": 0,
+                    "committee_id": recipient,
+                }
             if recipient not in all_recipients:
                 new_recipients.add(recipient)
                 all_recipients[recipient] = {
@@ -333,11 +419,14 @@ def process_individual_contributions(db):
                         "contribution_receipt_amount"
                     ]
                     grouped_by_recipient[c_id]["contributions"].append(
-                        {**claimed_contrib, "claimed": True}
+                        {**claimed_contrib, "claimed": True, "committee_id": c_id}
                     )
                 else:
                     grouped_by_recipient[c_id] = {
-                        "contributions": [{**claimed_contrib, "claimed": True}],
+                        "contributions": [
+                            {**claimed_contrib, "claimed": True, "committee_id": c_id}
+                        ],
+                        "committee_id": c_id,
                         "total": claimed_contrib["contribution_receipt_amount"],
                     }
                 if c_id not in all_recipients:
@@ -345,8 +434,23 @@ def process_individual_contributions(db):
                         "committee_id": c_id,
                         "needs_data": True,
                     }
+        all_contribs = deduped + db.individuals.get(ind_id, {}).get(
+            "claimedContributions", []
+        )
+        by_date = sorted(
+            all_contribs,
+            key=lambda x: x["contribution_receipt_date"],
+            reverse=True,
+        )
+        sorted_contributions = sorted(
+            grouped_by_recipient.values(), key=lambda x: x["total"], reverse=True
+        )
         db.client.collection("individuals").document(ind_id).set(
-            {**ind, "contributions": grouped_by_recipient}
+            {
+                **ind,
+                "contributions": sorted_contributions,
+                "contributions_by_date": by_date,
+            }
         )
 
     # Get recipient data and record any new committees
@@ -359,7 +463,8 @@ def process_individual_contributions(db):
         ind_id, ind = doc.id, doc.to_dict()
         contributions = ind["contributions"]
         party_summary = {}
-        for committee_id, group_data in contributions.items():
+        for group_data in contributions:
+            committee_id = group_data.get("committee_id", None)
             party = "UNK"
             if committee_id in recipients:
                 committee = recipients[committee_id]

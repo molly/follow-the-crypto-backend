@@ -37,25 +37,29 @@ def get_individual_search_params(individual, company, efiled=False):
 
 def update_spending_by_individuals(db):
     for str_id, individual in db.individuals.items():
-        old_contributions = (
+        old_contributions_dict = (
             db.client.collection("rawIndividualContributions")
             .document(str_id)
             .get()
             .to_dict()
-        )["contributions"]
-        new_contributions = []
+        )
+        if old_contributions_dict:
+            old_contribution_ids = set(
+                x["transaction_id"]
+                for x in old_contributions_dict.get("contributions", [])
+            )
+        else:
+            old_contribution_ids = set()
 
-        contributionsData = {"contributions": [], "associatedCompany": None}
+        new_contributions = []
+        contributions_data = {"contributions": [], "associatedCompany": None}
         associated_company = get_associated_company_id(
             individual, db.companies.values()
         )
         if associated_company:
-            contributionsData["associatedCompany"] = associated_company
+            contributions_data["associatedCompany"] = associated_company
 
-        ids_to_omit = set([x["transaction_id"] for x in old_contributions]).union(
-            set(db.duplicate_contributions.get(str_id, []))
-        )
-
+        ids_to_omit = set(db.duplicate_contributions.get(str_id, []))
         last_index = None
         last_contribution_receipt_date = None
         contribs_count = 0
@@ -84,12 +88,16 @@ def update_spending_by_individuals(db):
             contribs_count += contribution_data["pagination"]["per_page"]
             results = contribution_data["results"]
             for contrib in results:
-                if contrib["transaction_id"] in ids_to_omit:
+                if contrib["transaction_id"] in ids_to_omit or contrib[
+                    "committee_id"
+                ] in ["C00694323", "C00401224"]:
+                    # Duplicate transactions, or contributions to WinRed & ActBlue
                     continue
                 processed = process_contribution(contrib)
-                contributionsData["contributions"].append(processed)
+                contributions_data["contributions"].append(processed)
                 new_contributions.append(processed)
-                ids_to_omit.add(contrib["transaction_id"])
+                if contrib["transaction_id"] not in old_contribution_ids:
+                    new_contributions.append(processed)
 
             # Fetch more pages if they exist, or break
             if contribs_count >= contribution_data["pagination"]["count"]:
@@ -129,19 +137,22 @@ def update_spending_by_individuals(db):
             contribs_count += data["pagination"]["per_page"]
             results = data["results"]
             for contrib in results:
-                if contrib["transaction_id"] in ids_to_omit:
+                if contrib["transaction_id"] in ids_to_omit or contrib[
+                    "committee_id"
+                ] in ["C00694323", "C00401224"]:
                     continue
                 processed = {**process_contribution(contrib), "efiled": True}
-                contributionsData["contributions"].append(processed)
-                new_contributions.append(processed)
-                ids_to_omit.add(contrib["transaction_id"])
+                contributions_data["contributions"].append(processed)
+                if contrib["transaction_id"] not in old_contribution_ids:
+                    new_contributions.append(processed)
 
             # Fetch more pages if they exist, or break
             if page >= data["pagination"]["pages"]:
                 break
             else:
                 page += 1
+
         db.client.collection("rawIndividualContributions").document(str_id).set(
-            contributionsData
+            contributions_data
         )
-        return new_contributions
+    return new_contributions

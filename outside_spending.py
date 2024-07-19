@@ -148,25 +148,35 @@ def update_candidate_outside_spending(db):
                                 }
                             if result["support_oppose_indicator"] == "S":
                                 if amendment:
-                                    old_index = next(
-                                        i
-                                        for i, item in enumerate(
-                                            outside_spending[match]["support"]
+                                    try:
+                                        old_index = next(
+                                            i
+                                            for i, item in enumerate(
+                                                outside_spending[match]["support"]
+                                            )
+                                            if item["transaction_id"]
+                                            == result["transaction_id"]
                                         )
-                                        if item["transaction_id"]
-                                        == result["transaction_id"]
-                                    )
-                                    outside_spending[match][
-                                        "support_total"
-                                    ] -= outside_spending[match]["support"][old_index][
-                                        "expenditure_amount"
-                                    ]
-                                    outside_spending[match]["support"][
-                                        old_index
-                                    ] = pick(result, SCHEDULE_E_FIELDS)
-                                    outside_spending[match]["support_total"] += result[
-                                        "expenditure_amount"
-                                    ]
+                                        outside_spending[match][
+                                            "support_total"
+                                        ] -= outside_spending[match]["support"][
+                                            old_index
+                                        ][
+                                            "expenditure_amount"
+                                        ]
+                                        outside_spending[match]["support"][
+                                            old_index
+                                        ] = pick(result, SCHEDULE_E_FIELDS)
+                                        outside_spending[match][
+                                            "support_total"
+                                        ] += result["expenditure_amount"]
+                                    except StopIteration:
+                                        outside_spending[match]["support"].append(
+                                            pick(result, SCHEDULE_E_FIELDS)
+                                        )
+                                        outside_spending[match][
+                                            "support_total"
+                                        ] += result["expenditure_amount"]
                                 else:
                                     outside_spending[match]["support"].append(
                                         pick(result, SCHEDULE_E_FIELDS)
@@ -176,25 +186,35 @@ def update_candidate_outside_spending(db):
                                     ]
                             elif result["support_oppose_indicator"] == "O":
                                 if amendment:
-                                    old_index = next(
-                                        i
-                                        for i, item in enumerate(
-                                            outside_spending[match]["oppose"]
+                                    try:
+                                        old_index = next(
+                                            i
+                                            for i, item in enumerate(
+                                                outside_spending[match]["oppose"]
+                                            )
+                                            if item["transaction_id"]
+                                            == result["transaction_id"]
                                         )
-                                        if item["transaction_id"]
-                                        == result["transaction_id"]
-                                    )
-                                    outside_spending[match][
-                                        "oppose_total"
-                                    ] -= outside_spending[match]["oppose"][old_index][
-                                        "expenditure_amount"
-                                    ]
-                                    outside_spending[match]["oppose"][old_index] = pick(
-                                        result, SCHEDULE_E_FIELDS
-                                    )
-                                    outside_spending[match]["oppose_total"] += result[
-                                        "expenditure_amount"
-                                    ]
+                                        outside_spending[match][
+                                            "oppose_total"
+                                        ] -= outside_spending[match]["oppose"][
+                                            old_index
+                                        ][
+                                            "expenditure_amount"
+                                        ]
+                                        outside_spending[match]["oppose"][
+                                            old_index
+                                        ] = pick(result, SCHEDULE_E_FIELDS)
+                                        outside_spending[match][
+                                            "oppose_total"
+                                        ] += result["expenditure_amount"]
+                                    except:
+                                        outside_spending[match]["oppose"].append(
+                                            pick(result, SCHEDULE_E_FIELDS)
+                                        )
+                                        outside_spending[match][
+                                            "oppose_total"
+                                        ] += result["expenditure_amount"]
                                 else:
                                     outside_spending[match]["oppose"].append(
                                         pick(result, SCHEDULE_E_FIELDS)

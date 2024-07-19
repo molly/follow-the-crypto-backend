@@ -15,7 +15,11 @@ def process_company_contributions(db):
         for contrib in contributions:
             recipient = contrib["committee_id"]
             if recipient not in grouped_by_recipient:
-                grouped_by_recipient[recipient] = {"contributions": [], "total": 0}
+                grouped_by_recipient[recipient] = {
+                    "contributions": [],
+                    "total": 0,
+                    "committee_id": recipient,
+                }
             if recipient not in all_recipients:
                 new_recipients.add(recipient)
                 all_recipients[recipient] = {
@@ -47,13 +51,18 @@ def process_company_contributions(db):
                 db.client.collection("individuals").document(ind["id"]).get().to_dict()
             )
             ind_contribs = ind_data.get("contributions", {})
-            for recipient, group_data in ind_contribs.items():
+            for group_data in ind_contribs:
+                recipient = group_data["committee_id"]
                 contribs_with_attribution = [
                     {**c, "isIndividual": True, "individual": ind["id"]}
                     for c in group_data["contributions"]
                 ]
                 if recipient not in contributions:
-                    contributions[recipient] = {"contributions": [], "total": 0}
+                    contributions[recipient] = {
+                        "contributions": [],
+                        "total": 0,
+                        "committee_id": recipient,
+                    }
                 contributions[recipient]["contributions"].extend(
                     contribs_with_attribution
                 )
@@ -82,8 +91,12 @@ def process_company_contributions(db):
                     party_summary[party] = 0
             party_summary[party] += group_data["total"]
 
+        sorted_contributions = sorted(
+            contributions.values(), key=lambda x: x["total"], reverse=True
+        )
         db.client.collection("companies").document(company_id).set(
-            {"party_summary": party_summary, "contributions": contributions}, merge=True
+            {"party_summary": party_summary, "contributions": sorted_contributions},
+            merge=True,
         )
 
     return new_recipients

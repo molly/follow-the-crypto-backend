@@ -134,7 +134,9 @@ def process_expenditures(db):
                 ]
                 all_parties["rep_oppose"] += expenditure["expenditure_amount"]
             if expenditure["candidate_id"] in db.opposition_spending:
-                party = db.opposition_spending[expenditure["candidate_id"]]
+                party = db.opposition_spending[expenditure["candidate_id"]][
+                    "benefitsParty"
+                ]
                 if party == "DEM":
                     committees[committee_id]["oppose_benefit_dem"] += expenditure[
                         "expenditure_amount"
