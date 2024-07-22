@@ -21,7 +21,7 @@ def find_index_to_slice(candidate_list, candidate_data):
     ]
     median_raised = None
     if len(total_raised):
-        median_raised = statistics.median(total_raised)
+        median_raised = min(statistics.median(total_raised), 1000000)
 
     slice_ind = None
     supported_indices = []

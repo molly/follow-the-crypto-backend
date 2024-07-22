@@ -147,16 +147,24 @@ def dedupe_by_ids(group):
             reattributed = [
                 x for x in contribs if "EARMARK" not in get_description(x).upper()
             ]
-            if len(reattributed) < len(contribs):
+            if len(reattributed) == 0:
+                pass
+            elif len(reattributed) < len(contribs):
                 contribs = remove_efiled(reattributed)
                 if len(contribs) == 1:
                     deduped_by_id.append(contribs[0])
                     continue
-            contribs = reattributed
+            else:
+                contribs = reattributed
 
         # Last ditch, remove all efiled contribs
-        contribs = remove_efiled(contribs, True)
-        deduped_by_id.append(contribs[0])
+        no_efiled = remove_efiled(contribs, True)
+        if len(no_efiled) > 0:
+            deduped_by_id.append(no_efiled[0])
+            continue
+        else:
+            deduped_by_id.append(contribs[0])
+            continue
 
     return deduped_by_id
 

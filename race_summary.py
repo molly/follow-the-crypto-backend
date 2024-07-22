@@ -111,6 +111,8 @@ def summarize_races(db):
             race_expenditures = races_expenditures.get(full_race_id, {}).get(
                 "expenditures", []
             )
+            # Get total spending for each candidate, by committee, by race
+            spending = {}
 
             # Create set for each unique candidate in any sub-race in this race. This will always be equivalent to
             # Object.keys(candidates_data) and is just maintained for convenience.
@@ -357,11 +359,6 @@ def summarize_races(db):
                         )
                 candidates_data[candidate_key]["expenditure_races"].add(subrace)
 
-                # Add this expenditure's committee to the candidate's list of expenditure_committees
-                candidates_data[candidate_key]["expenditure_committees"].add(
-                    expenditure["committee_id"]
-                )
-
                 # Add expenditure to total support/oppose amount
                 if expenditure["support_oppose_indicator"] == "S":
                     candidates_data[candidate_key]["support_total"] = round(
@@ -375,6 +372,33 @@ def summarize_races(db):
                         + expenditure["expenditure_amount"],
                         2,
                     )
+
+                # Add expenditure to per-committee spending
+                c_id = expenditure["committee_id"]
+                if c_id not in spending:
+                    spending[c_id] = {"total": 0, "subraces": {}}
+                spending[c_id]["total"] += expenditure["expenditure_amount"]
+                if subrace not in spending[c_id]["subraces"]:
+                    spending[c_id]["subraces"][subrace] = {"candidates": {}, "total": 0}
+                spending[c_id]["subraces"][subrace]["total"] += expenditure[
+                    "expenditure_amount"
+                ]
+                if (
+                    candidate_key
+                    not in spending[c_id]["subraces"][subrace]["candidates"]
+                ):
+                    spending[c_id]["subraces"][subrace]["candidates"][candidate_key] = {
+                        "support": 0,
+                        "oppose": 0,
+                    }
+                if expenditure["support_oppose_indicator"] == "S":
+                    spending[c_id]["subraces"][subrace]["candidates"][candidate_key][
+                        "support"
+                    ] += expenditure["expenditure_amount"]
+                elif expenditure["support_oppose_indicator"] == "O":
+                    spending[c_id]["subraces"][subrace]["candidates"][candidate_key][
+                        "oppose"
+                    ] += expenditure["expenditure_amount"]
 
             withdrawn_candidates = (
                 list(race_data["withdrew"].keys()) if "withdrew" in race_data else []
@@ -444,6 +468,7 @@ def summarize_races(db):
 
             updated_data = {
                 db.client.field_path(race_id, "candidates"): candidates_data,
+                db.client.field_path(race_id, "spending"): spending,
             }
             if "withdrew" in race_data:
                 updated_data[db.client.field_path(race_id, "withdrew")] = race_data[
