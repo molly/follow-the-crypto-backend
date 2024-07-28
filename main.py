@@ -89,9 +89,9 @@ def main():
         # # Get committee ads
         # print("Get ads")
         # diff["ads"] = get_ads(db)
-
-        update_spending_by_company(db)
-        update_spending_by_individuals(db)
+        #
+        # update_spending_by_company(db)
+        # update_spending_by_individuals(db)
         diff["new_recipient_committees"] = process_individual_contributions(db)
         diff["new_recipient_committees"].union(process_company_contributions(db))
     except Exception as e:

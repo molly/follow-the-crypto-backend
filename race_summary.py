@@ -426,7 +426,10 @@ def summarize_races(db):
                                         == candidate_details["withdrew_race"]["type"]
                                     )
                                     and (
-                                        race["party"]
+                                        "party" in race
+                                        and "party"
+                                        in candidate_details["withdrew_race"]
+                                        and race["party"]
                                         == candidate_details["withdrew_race"]["party"]
                                     )
                                 )

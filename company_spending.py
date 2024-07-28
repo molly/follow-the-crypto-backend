@@ -58,23 +58,15 @@ def process_contribution(contrib):
 def update_spending_by_company(db):
     for str_id, company in db.companies.items():
         # Sync companies with the constants dict
-        company_id = company["os_id"]
-        data = openSecrets_fetch(
-            "company spending",
-            "http://www.opensecrets.org/api/?method=orgSummary",
-            params={"id": company_id},
-        )
-        company_data = data["response"]["organization"]["@attributes"]
         related_individuals = [
             individual
             for str_id, individual in db.individuals.items()
-            if individual.get("company", "") == company["name"]
+            if company["name"] in individual.get("company", [])
         ]
         related_individuals.sort(key=lambda x: x.get("title", "zzz"))
         db.client.collection("companies").document(str_id).set(
             {
                 **company,
-                "openSecrets": company_data,
                 "relatedIndividuals": related_individuals,
             }
         )
@@ -88,7 +80,7 @@ def update_spending_by_company(db):
         contribs_count = 0
 
         # Look for contributions by the company directly
-        if str_id != "paradigm":
+        if str_id != "paradigm" and str_id != "gemini":
             while True:
                 contribution_data = FEC_fetch(
                     "company contributions",
@@ -128,7 +120,7 @@ def update_spending_by_company(db):
         # Now fetch efiled contributions that may have not yet been processed
         page = 1
         contribs_count = 0
-        if str_id != "paradigm":
+        if str_id != "paradigm" and str_id != "gemini":
             while True:
                 data = FEC_fetch(
                     "unprocessed committee contributions",

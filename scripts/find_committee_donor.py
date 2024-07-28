@@ -1,7 +1,7 @@
-IDS = {"C00846303", "C00863373", "C00693895", "C00865220"}
+IDS = {"C00849810"}
 
 
-def tmp(db):
+def find_committee_donor(db):
     for doc in db.client.collection("individuals").stream():
         str_id, individual = doc.id, doc.to_dict()
         for contrib_group in individual["contributions"]:

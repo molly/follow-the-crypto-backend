@@ -2,17 +2,14 @@ from company_spending import process_contribution
 from utils import FEC_fetch
 
 
-def get_associated_company_id(individual, companies):
+def get_associated_company_ids(individual, companies):
+    company_ids = []
     if "company" in individual:
-        company = next(
-            (x for x in companies if x["name"] == individual["company"]), None
-        )
-        if company:
-            return company["id"]
-    return None
+        company_ids = [x["id"] for x in companies if x["name"] in individual["company"]]
+    return company_ids
 
 
-def get_individual_search_params(individual, company, efiled=False):
+def get_individual_search_params(individual, companies, efiled=False):
     search_params = {}
     search_params["contributor_name"] = individual.get(
         "nameSearch", individual["id"].replace("-", " ")
@@ -28,10 +25,11 @@ def get_individual_search_params(individual, company, efiled=False):
         ):
             return search_params
         search_params["contributor_employer"] = individual["employerSearch"]
-    elif company:
-        search_params["contributor_employer"] = company.get(
-            "search_id", company["id"].replace("-", " ")
-        )
+    elif companies:
+        search_params["contributor_employer"] = [
+            company.get("search_id", company["id"].replace("-", " "))
+            for company in companies
+        ]
     return search_params
 
 
@@ -52,20 +50,19 @@ def update_spending_by_individuals(db):
             old_contribution_ids = set()
 
         new_contributions = []
-        contributions_data = {"contributions": [], "associatedCompany": None}
-        associated_company = get_associated_company_id(
+        contributions_data = {"contributions": [], "associatedCompany": []}
+        associated_companies = get_associated_company_ids(
             individual, db.companies.values()
         )
-        if associated_company:
-            contributions_data["associatedCompany"] = associated_company
+        if associated_companies:
+            contributions_data["associatedCompany"] = associated_companies
 
         ids_to_omit = set(db.duplicate_contributions.get(str_id, []))
         last_index = None
         last_contribution_receipt_date = None
         contribs_count = 0
         search_params = get_individual_search_params(
-            individual,
-            db.companies[associated_company] if associated_company else None,
+            individual, [db.companies[company] for company in associated_companies]
         )
 
         # Get regularly filed contributions for individual
@@ -115,7 +112,7 @@ def update_spending_by_individuals(db):
         contribs_count = 0
         search_params = get_individual_search_params(
             individual,
-            db.companies[associated_company] if associated_company else None,
+            [db.companies[company] for company in associated_companies],
             efiled=True,
         )
         while True:
