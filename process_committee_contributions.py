@@ -1,3 +1,4 @@
+import logging
 from utils import pick
 
 SHARED_CONTRIBUTION_FIELDS = [
@@ -48,6 +49,8 @@ def pick_and_redact_contribution(d, keys):
 
 def is_redacted(contrib, allowlists):
     """Redact any names for occupations not captured within the occupationAllowlist."""
+    if contrib.get("claimed", False):
+        return False
     if contrib.get("entity_type") in {"ORG", "PAC"} or (
         not contrib["contributor_first_name"] and not contrib["contributor_last_name"]
     ):
@@ -60,6 +63,19 @@ def is_redacted(contrib, allowlists):
     return occupation not in allowlists["equals"] and not allowlists["contains"].search(
         occupation
     )
+
+
+def get_claimed_contributions(individuals, committee_id):
+    claimed_contributions = []
+    for individual in individuals.values():
+        if (
+            "claimedContributions" in individual
+            and len(individual["claimedContributions"]) > 0
+        ):
+            for contrib in individual["claimedContributions"]:
+                if contrib["committee_id"] == committee_id:
+                    claimed_contributions.append({**contrib, "claimed": True})
+    return claimed_contributions
 
 
 def process_contribution(contrib, db, donorMap):
@@ -107,8 +123,25 @@ def process_contribution(contrib, db, donorMap):
         }
         if link:
             donorMap["groups"][group]["link"] = link
+    elif contrib.get("claimed", False):
+        # Warn if there are claimed contributions that may duplicate ones coming from the FEC
+        if any(
+            ["claimed" not in x for x in donorMap["groups"][group]["contributions"]]
+        ):
+            logging.warning(
+                "Claimed contribution committee also appears in FEC data, check for duplicates.",
+                {"claimed_contrib": contrib},
+            )
+            print(
+                "Claimed contribution committee also appears in FEC data, check for duplicates. Ind: {} Committee: {}".format(
+                    contrib.get("contributor_name"), contrib.get("committee_id")
+                )
+            )
 
-    if contrib["line_number"] == "12" or contrib["line_number"].lower() == "11c":
+    if (
+        contrib.get("line_number") == "12"
+        or contrib.get("line_number", "").lower() == "11c"
+    ):
         # This was a transfer from another committee and shouldn't be double counted
         donorMap["total_transferred"] = round(
             donorMap["total_transferred"] + contrib["contribution_receipt_amount"],
@@ -166,7 +199,7 @@ def process_contribution(contrib, db, donorMap):
                 ] = contrib["contribution_receipt_date"]
 
             # Update the aggregate YTD contribution if this is a new high
-            if (
+            if "contributor_aggregate_ytd" in contrib and (
                 contrib["contributor_aggregate_ytd"]
                 > donorMap["groups"][group]["rollup"][contrib["contributor_name"]][
                     "contributor_aggregate_ytd"
@@ -188,6 +221,9 @@ def process_contribution(contrib, db, donorMap):
 
 def process_committee_contributions(db):
     raw_committee_contributions = db.client.collection("rawContributions").stream()
+    individuals = (
+        db.client.collection("constants").document("individuals").get().to_dict()
+    )
     for doc in raw_committee_contributions:
         committee_id, contributions = doc.id, doc.to_dict()
         all_contribs = []
@@ -206,6 +242,12 @@ def process_committee_contributions(db):
                 all_contribs.append(details)
                 if details.get("redacted"):
                     redacted_count += 1
+
+        # Get any claimed contributions
+        claimed = get_claimed_contributions(individuals, committee_id)
+        all_contribs += claimed
+        for contrib in claimed:
+            process_contribution(contrib, db, donorMap)
 
         for group, data in donorMap["groups"].items():
             # Combine the rollups with the contributions list
