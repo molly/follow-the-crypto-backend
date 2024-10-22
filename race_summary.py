@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 import logging
 import re
-from utils import FEC_fetch
+from utils import FEC_fetch, compare_names, get_expenditure_race_type
 from states import SINGLE_MEMBER_STATES
 from unidecode import unidecode
 
@@ -12,13 +12,6 @@ RACE_PRIORITY = {
     "convention": 3,
     None: 4,
 }
-
-
-def compare_names(name_portion, name):
-    upper_name = unidecode(name).upper()
-    if name_portion.upper() in upper_name:
-        return True
-    return False
 
 
 def trim_name(name):
@@ -70,36 +63,20 @@ def get_last_index_with_donation(sorted_candidates, candidates_data):
     return -1
 
 
-def get_expenditure_race_type(expenditure, races):
-    subrace = expenditure.get("subrace", None)
-    if subrace is not None:
-        return subrace
-    election_type = expenditure.get("election_type", None)
-    if election_type is None:
-        # If the expenditure doesn't have an election type (as with efiled expenditures), we have to try to figure it
-        # out from the date.
-        expenditure_date = expenditure.get(
-            "dissemination_date", expenditure.get("expenditure_date", None)
-        )
-        if expenditure_date is None:
-            return None
-        for race in races:
-            for candidate in race["candidates"]:
-                if compare_names(expenditure["candidate_last_name"], candidate["name"]):
-                    race_date = race.get("date", None)
-                    if race_date and race_date >= expenditure_date:
-                        expenditure["subrace"] = race["type"]
-                        return race["type"]
-        return None
-
-
 def summarize_races(db):
-    race_docs = db.client.collection("raceDetails").stream()
+    race_docs_stream = db.client.collection("raceDetails").stream()
+    race_docs = [doc for doc in race_docs_stream]
     all_expenditures = (
         db.client.collection("expenditures").document("all").get().to_dict()
     )
     states_expenditures = (
         db.client.collection("expenditures").document("states").get().to_dict()
+    )
+    recipients = (
+        db.client.collection("allRecipients")
+        .document("recipientsWithContribs")
+        .get()
+        .to_dict()
     )
     for doc in race_docs:
         state, state_data = doc.id, doc.to_dict()
@@ -212,9 +189,10 @@ def summarize_races(db):
                 candidates_data[candidate_race_name][
                     "candidate_id"
                 ] = FEC_candidate_data["candidate_id"]
-                candidates_data[candidate_race_name]["party"] = FEC_candidate_data[
-                    "party"
-                ][0]
+                if FEC_candidate_data["party"]:
+                    candidates_data[candidate_race_name]["party"] = FEC_candidate_data[
+                        "party"
+                    ][0]
                 candidates_data[candidate_race_name][
                     "incumbent_challenge"
                 ] = FEC_candidate_data["incumbent_challenge"]
@@ -224,7 +202,7 @@ def summarize_races(db):
 
             for entry in candidates_data.values():
                 if "candidate_id" not in entry:
-                    if entry["common_name"] in db.candidates:
+                    if entry["common_name"] and entry["common_name"] in db.candidates:
                         # A few weird edge cases are in the candidates constant, get that data here
                         c_id = db.candidates[entry["common_name"]]
                         FEC_candidates_data = FEC_fetch(
@@ -255,6 +233,13 @@ def summarize_races(db):
                         logging.error(
                             f"Having trouble locating FEC candidate: {entry['common_name']} in {state}-{race_id}"
                         )
+
+                if candidates_data[entry["common_name"]].get("candidate_id"):
+                    candidate_id = candidates_data[entry["common_name"]]["candidate_id"]
+                    if candidate_id in recipients:
+                        candidates_data[entry["common_name"]][
+                            "has_non_pac_support"
+                        ] = True
 
             # Iterate through each subrace
             for ind, race in enumerate(race_data["races"]):
@@ -407,6 +392,8 @@ def summarize_races(db):
                 if (
                     candidates_data[candidate]["support_total"] == 0
                     and candidates_data[candidate]["oppose_total"] == 0
+                    and candidates_data[candidate].get("candidate_id", "")
+                    not in {"S0WV00090", "H4OR05320"}
                 ):
                     # There can be a lot of withdrawn candidates, so only keep those involved in some expenditure
                     del candidates_data[candidate]

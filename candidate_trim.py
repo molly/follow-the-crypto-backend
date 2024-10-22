@@ -38,14 +38,10 @@ def find_index_to_slice(candidate_list, candidate_data):
             elif is_below_median(candidate_summary, median_raised):
                 # Remove candidates who raised below the median amount IF the vote hasn't happened yet
                 slice_ind = ind
-        if (
-            candidate_summary
-            and "support_total" in candidate_summary
-            and candidate_summary["support_total"] > 0
-        ) or (
-            candidate_summary
-            and "oppose_total" in candidate_summary
-            and candidate_summary["oppose_total"] > 0
+        if candidate_summary and (
+            candidate_summary.get("support_total", 0) > 0
+            or candidate_summary.get("oppose_total", 0) > 0
+            or candidate_summary.get("has_non_pac_support", False)
         ):
             # However, don't remove candidates who have received support or opposition
             supported_indices.append(ind + 1)

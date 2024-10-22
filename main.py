@@ -26,6 +26,7 @@ from individuals import update_spending_by_individuals
 from company_spending import update_spending_by_company
 from process_individual_contributions import process_individual_contributions
 from process_company_contributions import process_company_contributions
+from recipients import summarize_recipients
 
 
 def main():
@@ -46,12 +47,12 @@ def main():
     try:
         db = Database()
         db.get_constants()
-        # print("Hydrating committees")
-        # hydrate_committees(db)
-        #
-        # # Contributions to PACs
-        # print("Updating committee contributions")
-        # diff["contributions"] = update_committee_contributions(db)
+        print("Hydrating committees")
+        hydrate_committees(db)
+
+        # Contributions to PACs
+        print("Updating committee contributions")
+        diff["contributions"] = update_committee_contributions(db)
         print("Processing committee contributions")
         process_committee_contributions(db)
 
@@ -64,6 +65,12 @@ def main():
         # Disbursements by PACs
         print("Updating committee disbursements")
         diff["disbursements"] = update_committee_disbursements(db)
+
+        Individual and company spending
+        update_spending_by_company(db)
+        update_spending_by_individuals(db)
+        diff["new_recipient_committees"] = process_individual_contributions(db)
+        diff["new_recipient_committees"].union(process_company_contributions(db))
 
         # Race details
         print("Updating race details")
@@ -82,7 +89,7 @@ def main():
         print("Get top raised PACs")
         get_top_raised_pacs(db)
 
-        # Group expenditures by candidate
+        Group expenditures by candidate
         print("Update candidate expenditures")
         update_candidates_expenditures(db)
 
@@ -90,10 +97,7 @@ def main():
         print("Get ads")
         diff["ads"] = get_ads(db)
 
-        update_spending_by_company(db)
-        update_spending_by_individuals(db)
-        diff["new_recipient_committees"] = process_individual_contributions(db)
-        diff["new_recipient_committees"].union(process_company_contributions(db))
+        summarize_recipients(db)
     except Exception as e:
         traceback.print_exc()
         logging.exception(e)

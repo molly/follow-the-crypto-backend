@@ -276,7 +276,7 @@ def process_committee_contributions(db):
                     else x["total_receipt_amount"],
                     x["contribution_receipt_date"]
                     if "contribution_receipt_date" in x
-                    else None,
+                    else "0",
                 ),
                 reverse=True,
             )

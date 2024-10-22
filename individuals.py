@@ -90,6 +90,16 @@ def update_spending_by_individuals(db):
                 ] in ["C00694323", "C00401224"]:
                     # Duplicate transactions, or contributions to WinRed & ActBlue
                     continue
+                if (
+                    str_id == "cameron-winklevoss"
+                    and contrib["transaction_id"] == "SA11AI.122113936"
+                ):
+                    contrib["contribution_receipt_amount"] = 838089.15
+                elif (
+                    str_id == "tyler-winklevoss"
+                    and contrib["transaction_id"] == "SA11AI.122113934"
+                ):
+                    contrib["contribution_receipt_amount"] = 838089.15
                 processed = process_contribution(contrib)
                 contributions_data["contributions"].append(processed)
                 new_contributions.append(processed)
@@ -138,6 +148,16 @@ def update_spending_by_individuals(db):
                     "committee_id"
                 ] in ["C00694323", "C00401224"]:
                     continue
+                if (
+                    str_id == "cameron-winklevoss"
+                    and contrib["transaction_id"] == "SA11AI.122113936"
+                ):
+                    contrib["contribution_receipt_amount"] = 838089.15
+                elif (
+                    str_id == "tyler-winklevoss"
+                    and contrib["transaction_id"] == "SA11AI.122113934"
+                ):
+                    contrib["contribution_receipt_amount"] = 838089.15
                 processed = {**process_contribution(contrib), "efiled": True}
                 contributions_data["contributions"].append(processed)
                 if contrib["transaction_id"] not in old_contribution_ids:

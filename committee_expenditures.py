@@ -23,7 +23,7 @@ EXPENDITURE_FIELDS = [
     "support_oppose_indicator",
     "transaction_id",
     # Custom added fields
-    "subrace",
+    " subrace",
     "committee_id",
     "uid",
 ]

@@ -47,6 +47,9 @@ def process_expenditures(db):
         race = get_race_name(expenditure)
         committee_id = expenditure["committee_id"]
         state = expenditure["candidate_office_state"]
+        if state is None:
+            state = "US"
+
         totals["all"] += expenditure["expenditure_amount"]
         if committee_id not in totals["by_committee"]:
             totals["by_committee"][committee_id] = expenditure["expenditure_amount"]

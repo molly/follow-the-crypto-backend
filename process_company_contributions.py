@@ -1,10 +1,12 @@
-from process_individual_contributions import get_missing_recipient_data
+from get_missing_recipients import get_missing_recipient_data
 
 
 def process_company_contributions(db):
     all_recipients = (
         db.client.collection("allRecipients").document("recipients").get().to_dict()
     )
+    if not all_recipients:
+        all_recipients = {}
     new_recipients = set()
 
     for doc in db.client.collection("rawCompanyContributions").stream():
