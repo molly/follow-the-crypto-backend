@@ -66,7 +66,7 @@ def main():
         print("Updating committee disbursements")
         diff["disbursements"] = update_committee_disbursements(db)
 
-        Individual and company spending
+        # Individual and company spending
         update_spending_by_company(db)
         update_spending_by_individuals(db)
         diff["new_recipient_committees"] = process_individual_contributions(db)
@@ -89,7 +89,7 @@ def main():
         print("Get top raised PACs")
         get_top_raised_pacs(db)
 
-        Group expenditures by candidate
+        # Group expenditures by candidate
         print("Update candidate expenditures")
         update_candidates_expenditures(db)
 
