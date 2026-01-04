@@ -2,9 +2,8 @@ from get_missing_recipients import get_missing_recipient_data
 
 
 def process_company_contributions(db, session):
-    all_recipients = (
-        db.client.collection("allRecipients").document("recipients").get().to_dict()
-    )
+    recipients_doc = db.client.collection("allRecipients").document("recipients").get()
+    all_recipients = recipients_doc.to_dict() if recipients_doc.exists else {}
     if not all_recipients:
         all_recipients = {}
     new_recipients = set()

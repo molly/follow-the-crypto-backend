@@ -256,9 +256,8 @@ def process_contribution_group(group):
 
 
 def process_individual_contributions(db, session):
-    all_recipients = (
-        db.client.collection("allRecipients").document("recipients").get().to_dict()
-    )
+    recipients_doc = db.client.collection("allRecipients").document("recipients").get()
+    all_recipients = recipients_doc.to_dict() if recipients_doc.exists else {}
     if not all_recipients:
         all_recipients = {}
     new_recipients = set()
