@@ -22,13 +22,40 @@ def update_company_contributions_selective(db, company_ids):
         all_recipients = {}
     new_recipients = set()
 
-    for company_id in company_ids:
-        # Get company data
-        company_doc = db.client.collection("companies").document(company_id).get()
-        if not company_doc.exists:
-            continue
+    # Batch fetch all companies at once
+    companies_data = {}
+    if company_ids:
+        company_refs = [
+            db.client.collection("companies").document(company_id)
+            for company_id in company_ids
+        ]
+        for company_doc in db.client.get_all(company_refs):
+            if company_doc.exists:
+                company_data = company_doc.to_dict()
+                if company_data:
+                    companies_data[company_doc.id] = company_data
 
-        company = company_doc.to_dict()
+    # Collect all unique individual IDs we need to fetch
+    all_individual_ids = set()
+    for company_data in companies_data.values():
+        related_individuals = company_data.get("relatedIndividuals", [])
+        for ind in related_individuals:
+            all_individual_ids.add(ind["id"])
+
+    # Batch fetch all individuals at once
+    individuals_data = {}
+    if all_individual_ids:
+        individual_refs = [
+            db.client.collection("individuals").document(ind_id)
+            for ind_id in all_individual_ids
+        ]
+        for ind_doc in db.client.get_all(individual_refs):
+            if ind_doc.exists:
+                individuals_data[ind_doc.id] = ind_doc.to_dict()
+
+    # Process each company
+    for company_id in company_ids:
+        company = companies_data.get(company_id)
         if not company:
             continue
 
@@ -37,8 +64,7 @@ def update_company_contributions_selective(db, company_ids):
 
         # Add contributions from related individuals
         for ind in related_individuals:
-            ind_doc = db.client.collection("individuals").document(ind["id"]).get()
-            ind_data = ind_doc.to_dict() if ind_doc.exists else None
+            ind_data = individuals_data.get(ind["id"])
             if not ind_data:
                 continue
 

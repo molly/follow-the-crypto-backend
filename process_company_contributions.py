@@ -42,15 +42,36 @@ def process_company_contributions(db, session):
     db.client.collection("allRecipients").document("recipients").set(recipients)
 
     # Bring in spending by related individuals
-    # Summarize spending by party
+    # First, collect all unique individual IDs we need to fetch
+    all_individual_ids = set()
+    companies_list = []
     for doc in db.client.collection("companies").stream():
         company_id, company = doc.id, doc.to_dict()
+        companies_list.append((company_id, company))
+        related_individuals = company.get("relatedIndividuals", [])
+        for ind in related_individuals:
+            all_individual_ids.add(ind["id"])
+
+    # Batch fetch all individuals at once
+    individuals_data = {}
+    if all_individual_ids:
+        individual_refs = [
+            db.client.collection("individuals").document(ind_id)
+            for ind_id in all_individual_ids
+        ]
+        # Firestore get_all() fetches up to 500 documents at once
+        for ind_doc in db.client.get_all(individual_refs):
+            if ind_doc.exists:
+                individuals_data[ind_doc.id] = ind_doc.to_dict()
+
+    # Summarize spending by party
+    for company_id, company in companies_list:
         contributions = company.get("contributions", {})
         related_individuals = company.get("relatedIndividuals", [])
         for ind in related_individuals:
-            ind_data = (
-                db.client.collection("individuals").document(ind["id"]).get().to_dict()
-            )
+            ind_data = individuals_data.get(ind["id"])
+            if not ind_data:
+                continue
             ind_contribs = ind_data.get("contributions", {})
             for group_data in ind_contribs:
                 recipient = group_data["committee_id"]
