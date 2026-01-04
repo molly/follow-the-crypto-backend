@@ -2,6 +2,17 @@
 
 This directory contains command-line utilities to manage individuals in the Follow the Crypto dataset without needing to manually edit Firestore documents or run the entire pipeline.
 
+## ⚠️ Important: Company Dependencies
+
+**When adding individuals, the system automatically handles company data dependencies:**
+
+- If an individual lists companies in their `company` field, those companies' data will be updated
+- Company `relatedIndividuals` lists are refreshed
+- Company contribution totals are recalculated to include the new individual's contributions
+- Company party summaries are updated
+
+This means adding one individual may trigger updates to multiple company records. The commands handle this automatically but it's important to understand the scope of changes.
+
 ## Available Commands
 
 ### 1. Add Individual (`add_individual.py`)
@@ -83,8 +94,20 @@ python -m commands.list_individuals --verbose
 **New Way:**
 
 ```bash
-# One command adds and fetches data
-python -m commands.add_individual --id "new-person" --name "New Person" --zip "12345"
+# One command adds and fetches data + updates company dependencies
+python -m commands.add_individual --id "new-person" --name "New Person" --company "Crypto Corp" --zip "12345"
+```
+
+### Company Impact Example
+
+```bash
+# Adding an employee automatically updates the company page
+python -m commands.add_individual --id "jane-crypto-ceo" --name "Jane Doe" --company "Crypto Corp" --title "CEO"
+# ✅ Individual added
+# 📊 Fetched 25 contributions
+# 🔄 Processed contributions, found 3 new recipients
+# 🏢 Updated company data, found 1 new company recipients
+# ℹ️  Companies associated with jane-crypto-ceo: Crypto Corp
 ```
 
 ### Batch Operations
@@ -94,8 +117,8 @@ python -m commands.add_individual --id "new-person" --name "New Person" --zip "1
 python -m commands.add_individual --id "person-1" --name "Person One" --zip "12345" --no-fetch
 python -m commands.add_individual --id "person-2" --name "Person Two" --zip "67890" --no-fetch
 
-# Then fetch all at once using pipeline
-python pipeline.py --tasks fetch_individual_spending_selective --individual-ids "person-1,person-2"
+# Then fetch all at once using pipeline (also updates companies)
+python pipeline.py --tasks complete_individual_workflow --individual-ids "person-1,person-2"
 ```
 
 ### Checking Status
@@ -126,6 +149,29 @@ The commands create individual records with the same structure as existing data:
 
 - Core: Uses existing Database and pipeline infrastructure
 - Optional: `tabulate` for better table formatting (falls back gracefully)
+
+## Dependency Cascade Handling
+
+The commands automatically handle these data dependencies:
+
+### Individual → Company Relationships
+
+1. **relatedIndividuals lists**: When you add someone with a `company` field, that company's `relatedIndividuals` array is updated
+2. **Company contribution totals**: The company's contribution summary includes the new individual's contributions
+3. **Company party summaries**: Political party breakdowns are recalculated with the new data
+
+### What Gets Updated
+
+- ✅ `rawIndividualContributions` collection (individual's contribution data)
+- ✅ `individuals` collection (processed individual data)
+- ✅ `companies` collection (affected companies get updated `relatedIndividuals` and `contributions`)
+- ✅ `allRecipients` collection (any new recipient committees discovered)
+
+### Performance Impact
+
+- Adding individual without company association: ~30 seconds
+- Adding individual with company association: ~60-90 seconds (includes company reprocessing)
+- Multiple individuals: Use `--no-fetch` then batch process with pipeline
 
 ## Error Handling
 

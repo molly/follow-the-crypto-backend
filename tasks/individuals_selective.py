@@ -5,6 +5,8 @@ Enhanced individual processing tasks that support selective updates.
 from pipeline_core.task import task
 from individuals import update_spending_by_individuals
 from process_individual_contributions import process_individual_contributions as process_ind
+from company_spending import update_spending_by_company
+from process_company_contributions import process_company_contributions
 import logging
 
 
@@ -80,6 +82,7 @@ def process_individual_contributions_selective(context, individual_ids=None):
 def add_and_process_individual(context, individual_id, individual_data):
     """
     Add a new individual and immediately fetch and process their data.
+    Also updates company data if the individual is associated with companies.
     
     Args:
         individual_id: Unique identifier for the individual
@@ -105,9 +108,29 @@ def add_and_process_individual(context, individual_id, individual_data):
     fetch_result = fetch_individual_spending_selective(context, [individual_id])
     process_result = process_individual_contributions_selective(context, [individual_id])
     
+    # Update company data if this individual is associated with companies
+    companies_updated = False
+    company_result = {}
+    if "company" in individual_data and individual_data["company"]:
+        logging.info(f"Updating company data for associated companies: {individual_data['company']}")
+        
+        # Update company spending to refresh relatedIndividuals
+        update_spending_by_company(context.db)
+        
+        # Process company contributions to include this individual's data
+        company_new_recipients = process_company_contributions(context.db)
+        
+        companies_updated = True
+        company_result = {
+            "new_recipients": list(company_new_recipients),
+            "associated_companies": individual_data["company"]
+        }
+    
     return {
         "individual_id": individual_id,
         "added": True,
         "fetch_result": fetch_result,
-        "process_result": process_result
+        "process_result": process_result,
+        "companies_updated": companies_updated,
+        "company_result": company_result
     }

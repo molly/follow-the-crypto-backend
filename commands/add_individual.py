@@ -12,6 +12,10 @@ import logging
 from Database import Database
 from individuals import update_spending_by_individuals
 from process_individual_contributions import process_individual_contributions
+from company_spending import update_spending_by_company
+from process_company_contributions import process_company_contributions
+from company_spending import update_spending_by_company
+from process_company_contributions import process_company_contributions
 
 
 def add_individual(individual_id: str, individual_data: dict, fetch_immediately: bool = True):
@@ -51,7 +55,8 @@ def add_individual(individual_id: str, individual_data: dict, fetch_immediately:
         "individual_id": individual_id,
         "added": True,
         "data_fetched": False,
-        "contributions_processed": False
+        "contributions_processed": False,
+        "companies_updated": False
     }
     
     if fetch_immediately:
@@ -68,14 +73,31 @@ def add_individual(individual_id: str, individual_data: dict, fetch_immediately:
             result["data_fetched"] = True
             result["new_contributions_count"] = len(new_contributions)
             
+            # Restore full individuals list for processing
+            db.individuals = original_individuals
+            
             # Process the contributions
             new_recipients = process_individual_contributions(db)
             result["contributions_processed"] = True
             result["new_recipients"] = list(new_recipients)
             
-        finally:
-            # Restore full individuals list
+            # Update company data if this person is associated with companies
+            if "company" in individual_data and individual_data["company"]:
+                logging.info(f"Updating company data for associated companies: {individual_data['company']}")
+                
+                # Need to update company spending to refresh relatedIndividuals
+                update_spending_by_company(db)
+                
+                # Process company contributions to include this individual's data
+                company_new_recipients = process_company_contributions(db)
+                
+                result["companies_updated"] = True
+                result["company_new_recipients"] = list(company_new_recipients)
+                
+        except Exception as e:
+            # Restore full individuals list in case of error
             db.individuals = original_individuals
+            raise e
     
     return result
 
@@ -142,6 +164,14 @@ def main():
         
         if result["contributions_processed"]:
             print(f"🔄 Processed contributions, found {len(result['new_recipients'])} new recipients")
+        
+        if result.get("companies_updated"):
+            print(f"🏢 Updated company data, found {len(result.get('company_new_recipients', []))} new company recipients")
+            print(f"ℹ️  Companies associated with {args.id}: {', '.join(individual_data.get('company', []))}")
+        
+        if result.get("companies_updated"):
+            print(f"🏢 Updated company data, found {len(result.get('company_new_recipients', []))} new company recipients")
+            print(f"ℹ️  Companies associated with {args.id}: {', '.join(individual_data.get('company', []))}")
         
         if not result["data_fetched"]:
             print("ℹ️  Use 'python -m commands.fetch_individual --id {}' to fetch contribution data later".format(args.id))

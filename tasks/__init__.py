@@ -7,6 +7,7 @@ from . import expenditures
 from . import disbursements
 from . import individuals
 from . import individuals_selective  # New selective individual tasks
+from . import company_dependencies  # Company dependency handling
 from . import companies
 from . import races
 from . import candidates
@@ -21,6 +22,7 @@ __all__ = [
     "disbursements",
     "individuals",
     "individuals_selective",
+    "company_dependencies",
     "companies",
     "races",
     "candidates",

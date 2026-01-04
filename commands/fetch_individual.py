@@ -12,6 +12,8 @@ import logging
 from Database import Database
 from individuals import update_spending_by_individuals
 from process_individual_contributions import process_individual_contributions
+from company_spending import update_spending_by_company
+from process_company_contributions import process_company_contributions
 
 
 def fetch_individual_data(individual_id: str, force: bool = False):
@@ -60,12 +62,27 @@ def fetch_individual_data(individual_id: str, force: bool = False):
         # Process the contributions
         new_recipients = process_individual_contributions(db)
         
+        # Update company data if this person is associated with companies
+        company_new_recipients = set()
+        companies_updated = False
+        if "company" in individual_data and individual_data["company"]:
+            logging.info(f"Updating company data for associated companies: {individual_data['company']}")
+            
+            # Need to update company spending to refresh relatedIndividuals
+            update_spending_by_company(db)
+            
+            # Process company contributions to include this individual's data
+            company_new_recipients = process_company_contributions(db)
+            companies_updated = True
+        
         return {
             "individual_id": individual_id,
             "data_fetched": True,
             "new_contributions_count": len(new_contributions),
             "contributions_processed": True,
-            "new_recipients": list(new_recipients)
+            "new_recipients": list(new_recipients),
+            "companies_updated": companies_updated,
+            "company_new_recipients": list(company_new_recipients)
         }
         
     finally:
@@ -92,6 +109,9 @@ def main():
             print(f"✅ Successfully fetched data for '{args.id}'")
             print(f"📊 Fetched {result['new_contributions_count']} contributions")
             print(f"🔄 Found {len(result['new_recipients'])} new recipients")
+            
+            if result.get("companies_updated"):
+                print(f"🏢 Updated company data, found {len(result.get('company_new_recipients', []))} new company recipients")
             
     except Exception as e:
         print(f"❌ Error fetching individual data: {e}")
