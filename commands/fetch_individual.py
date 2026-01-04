@@ -14,6 +14,8 @@ from individuals import update_spending_by_individuals
 from process_individual_contributions import process_individual_contributions
 from company_spending import update_spending_by_company
 from process_company_contributions import process_company_contributions
+# Import the selective update functions from add_individual
+from commands.add_individual import update_specific_companies
 
 
 def fetch_individual_data(individual_id: str, force: bool = False):
@@ -65,15 +67,14 @@ def fetch_individual_data(individual_id: str, force: bool = False):
         # Update company data if this person is associated with companies
         company_new_recipients = set()
         companies_updated = False
+        optimization = "none"
         if "company" in individual_data and individual_data["company"]:
-            logging.info(f"Updating company data for associated companies: {individual_data['company']}")
+            logging.info(f"Selectively updating companies: {individual_data['company']}")
             
-            # Need to update company spending to refresh relatedIndividuals
-            update_spending_by_company(db)
-            
-            # Process company contributions to include this individual's data
-            company_new_recipients = process_company_contributions(db)
+            # Use selective update for daily operations efficiency
+            company_new_recipients = update_specific_companies(db, individual_data, individual_id)
             companies_updated = True
+            optimization = "selective_company_update"
         
         return {
             "individual_id": individual_id,
@@ -82,7 +83,8 @@ def fetch_individual_data(individual_id: str, force: bool = False):
             "contributions_processed": True,
             "new_recipients": list(new_recipients),
             "companies_updated": companies_updated,
-            "company_new_recipients": list(company_new_recipients)
+            "company_new_recipients": list(company_new_recipients),
+            "optimization": optimization
         }
         
     finally:
@@ -111,7 +113,13 @@ def main():
             print(f"🔄 Found {len(result['new_recipients'])} new recipients")
             
             if result.get("companies_updated"):
-                print(f"🏢 Updated company data, found {len(result.get('company_new_recipients', []))} new company recipients")
+                companies = []
+                # Get company info from database
+                if individual_id in db.individuals:
+                    companies = db.individuals[individual_id].get('company', [])
+                optimization = result.get('optimization', 'full_reprocess')
+                print(f"🏢 Updated {len(companies)} company(ies), found {len(result.get('company_new_recipients', []))} new company recipients")
+                print(f"ℹ️  Optimization: {optimization}")
             
     except Exception as e:
         print(f"❌ Error fetching individual data: {e}")

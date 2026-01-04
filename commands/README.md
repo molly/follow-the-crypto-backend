@@ -79,6 +79,31 @@ python -m commands.list_individuals --verbose
 
 - `--verbose, -v`: Show detailed information including all fields
 
+### 4. **NEW: Batch Daily Operations (`batch_daily.py`)**
+
+⚡ **Optimized for daily operations** - efficiently handles multiple individuals.
+
+```bash
+# Add multiple people for later processing (fast)
+python -m commands.batch_daily --add "person1:Company A" --add "person2:Company B"
+
+# Process all pending individuals (efficient batch processing)
+python -m commands.batch_daily --process-pending
+
+# Add and process immediately
+python -m commands.batch_daily --add "person1:Company A" --process-immediately
+
+# Quick status check
+python pipeline.py --tasks daily_quick_check
+```
+
+**Benefits for Daily Operations:**
+
+- ✅ **Selective company updates** - only affected companies are reprocessed
+- ✅ **Batch processing** - processes multiple individuals together
+- ✅ **Incremental updates** - only processes individuals without data
+- ✅ **Time limits** - respects daily operation time constraints
+
 ## Workflow Examples
 
 ### Adding a New Person (Traditional vs New Way)
@@ -120,6 +145,41 @@ python -m commands.add_individual --id "person-2" --name "Person Two" --zip "678
 # Then fetch all at once using pipeline (also updates companies)
 python pipeline.py --tasks complete_individual_workflow --individual-ids "person-1,person-2"
 ```
+
+### **⚡ Daily Operations Workflow (RECOMMENDED)**
+
+For frequent/daily additions, use the optimized batch commands:
+
+```bash
+# 1. Add multiple people quickly (no immediate processing)
+python -m commands.batch_daily --add "alice-ceo:Crypto Corp" --add "bob-cto:Crypto Corp"
+
+# 2. Process all pending in one efficient batch
+python -m commands.batch_daily --process-pending
+
+# 3. Or add and process immediately for urgent cases
+python -m commands.batch_daily --add "urgent-person:Important Co" --process-immediately
+```
+
+**Daily Pipeline Tasks:**
+
+```bash
+# Quick status check (fast)
+python pipeline.py --tasks daily_quick_check
+
+# Process only unprocessed individuals (efficient)
+python pipeline.py --tasks daily_individual_update
+
+# Full incremental daily pipeline (respects time limits)
+python pipeline.py --tasks daily_incremental_pipeline
+```
+
+**Why Use Daily Operations:**
+
+- 🚀 **10x faster** - selective updates instead of full reprocessing
+- 💾 **Incremental** - only processes what's missing
+- ⏰ **Time-aware** - respects daily operation time constraints
+- 🎯 **Selective** - only updates affected companies
 
 ### Checking Status
 

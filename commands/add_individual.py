@@ -14,6 +14,142 @@ from individuals import update_spending_by_individuals
 from process_individual_contributions import process_individual_contributions
 from company_spending import update_spending_by_company
 from process_company_contributions import process_company_contributions
+
+
+def update_specific_companies(db, individual_data, individual_id):
+    """
+    Update only the companies associated with this specific individual.
+    More efficient than reprocessing all companies.
+    """
+    if "company" not in individual_data or not individual_data["company"]:
+        return set()  # No companies to update
+    
+    associated_company_names = individual_data["company"]
+    logging.info(f"Updating specific companies: {associated_company_names}")
+    
+    # Find company IDs that match the names
+    company_ids_to_update = []
+    for company_id, company in db.companies.items():
+        if company["name"] in associated_company_names:
+            company_ids_to_update.append(company_id)
+    
+    if not company_ids_to_update:
+        logging.warning(f"No matching company IDs found for: {associated_company_names}")
+        return set()
+    
+    # Update just these specific companies
+    original_companies = db.companies.copy()
+    temp_companies = {cid: db.companies[cid] for cid in company_ids_to_update}
+    db.companies = temp_companies
+    
+    try:
+        # Update company spending for just these companies
+        update_spending_by_company(db)
+        
+        # Restore full companies list
+        db.companies = original_companies
+        
+        # Now update the company documents with the new relatedIndividuals
+        for company_id in company_ids_to_update:
+            # Get fresh company data with updated relatedIndividuals
+            company = db.companies[company_id]
+            related_individuals = [
+                individual
+                for ind_id, individual in db.individuals.items()
+                if company["name"] in individual.get("company", [])
+            ]
+            related_individuals.sort(key=lambda x: x.get("title", "zzz"))
+            
+            # Update the company document
+            db.client.collection("companies").document(company_id).set(
+                {
+                    **company,
+                    "relatedIndividuals": related_individuals,
+                },
+                merge=True
+            )
+        
+        # Process contributions for just these companies
+        return update_company_contributions_selective(db, company_ids_to_update)
+        
+    finally:
+        # Ensure companies list is restored
+        db.companies = original_companies
+
+
+def update_company_contributions_selective(db, company_ids):
+    """
+    Update company contributions for only specific companies.
+    """
+    from get_missing_recipients import get_missing_recipient_data
+    
+    all_recipients = (
+        db.client.collection("allRecipients").document("recipients").get().to_dict()
+    )
+    if not all_recipients:
+        all_recipients = {}
+    new_recipients = set()
+    
+    for company_id in company_ids:
+        # Get company data
+        company_doc = db.client.collection("companies").document(company_id).get()
+        if not company_doc.exists:
+            continue
+            
+        company = company_doc.to_dict()
+        contributions = company.get("contributions", {})
+        related_individuals = company.get("relatedIndividuals", [])
+        
+        # Add contributions from related individuals
+        for ind in related_individuals:
+            ind_data = (
+                db.client.collection("individuals").document(ind["id"]).get().to_dict()
+            )
+            if not ind_data:
+                continue
+                
+            ind_contribs = ind_data.get("contributions", [])
+            for group_data in ind_contribs:
+                recipient = group_data["committee_id"]
+                contribs_with_attribution = [
+                    {**c, "isIndividual": True, "individual": ind["id"]}
+                    for c in group_data["contributions"]
+                ]
+                if recipient not in contributions:
+                    contributions[recipient] = {
+                        "contributions": [],
+                        "total": 0,
+                        "committee_id": recipient,
+                    }
+                
+                # Add to recipients tracking
+                if recipient not in all_recipients:
+                    new_recipients.add(recipient)
+                    all_recipients[recipient] = {
+                        "committee_id": recipient,
+                        "candidate_details": {},
+                        "needs_data": True,
+                    }
+                
+                contributions[recipient]["contributions"].extend(
+                    contribs_with_attribution
+                )
+                contributions[recipient]["total"] += group_data["total"]
+        
+        # Update the company with new contribution data
+        sorted_contributions = sorted(
+            contributions.values(), key=lambda x: x["total"], reverse=True
+        )
+        db.client.collection("companies").document(company_id).set(
+            {"contributions": sorted_contributions}, merge=True
+        )
+    
+    # Update recipients if there are new ones
+    if new_recipients:
+        recipients = get_missing_recipient_data(all_recipients, db)
+        db.client.collection("allRecipients").document("recipients").set(recipients)
+    
+    return new_recipients
 from company_spending import update_spending_by_company
 from process_company_contributions import process_company_contributions
 
@@ -83,16 +219,14 @@ def add_individual(individual_id: str, individual_data: dict, fetch_immediately:
             
             # Update company data if this person is associated with companies
             if "company" in individual_data and individual_data["company"]:
-                logging.info(f"Updating company data for associated companies: {individual_data['company']}")
+                logging.info(f"Selectively updating companies: {individual_data['company']}")
                 
-                # Need to update company spending to refresh relatedIndividuals
-                update_spending_by_company(db)
-                
-                # Process company contributions to include this individual's data
-                company_new_recipients = process_company_contributions(db)
+                # Use selective update instead of full reprocessing
+                company_new_recipients = update_specific_companies(db, individual_data, individual_id)
                 
                 result["companies_updated"] = True
                 result["company_new_recipients"] = list(company_new_recipients)
+                result["optimization"] = "selective_company_update"
                 
         except Exception as e:
             # Restore full individuals list in case of error
@@ -166,15 +300,14 @@ def main():
             print(f"🔄 Processed contributions, found {len(result['new_recipients'])} new recipients")
         
         if result.get("companies_updated"):
-            print(f"🏢 Updated company data, found {len(result.get('company_new_recipients', []))} new company recipients")
-            print(f"ℹ️  Companies associated with {args.id}: {', '.join(individual_data.get('company', []))}")
-        
-        if result.get("companies_updated"):
-            print(f"🏢 Updated company data, found {len(result.get('company_new_recipients', []))} new company recipients")
-            print(f"ℹ️  Companies associated with {args.id}: {', '.join(individual_data.get('company', []))}")
+            companies = individual_data.get('company', [])
+            optimization = result.get('optimization', 'full_reprocess')
+            print(f"🏢 Updated {len(companies)} company(ies), found {len(result.get('company_new_recipients', []))} new company recipients")
+            print(f"ℹ️  Companies: {', '.join(companies)} (optimization: {optimization})")
         
         if not result["data_fetched"]:
             print("ℹ️  Use 'python -m commands.fetch_individual --id {}' to fetch contribution data later".format(args.id))
+            print("💡 For daily operations: Use --no-fetch then batch process multiple individuals")
             
     except Exception as e:
         print(f"❌ Error adding individual: {e}")
