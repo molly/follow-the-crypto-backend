@@ -13,7 +13,7 @@ from Database import Database
 from individuals import update_spending_by_individuals
 from process_individual_contributions import process_individual_contributions
 from company_spending import update_spending_by_company
-from process_company_contributions import process_company_contributions
+from company_utils import update_company_contributions_selective
 
 
 def update_specific_companies(db, individual_data, individual_id):
@@ -75,83 +75,6 @@ def update_specific_companies(db, individual_data, individual_id):
     finally:
         # Ensure companies list is restored
         db.companies = original_companies
-
-
-def update_company_contributions_selective(db, company_ids):
-    """
-    Update company contributions for only specific companies.
-    """
-    from get_missing_recipients import get_missing_recipient_data
-    
-    all_recipients = (
-        db.client.collection("allRecipients").document("recipients").get().to_dict()
-    )
-    if not all_recipients:
-        all_recipients = {}
-    new_recipients = set()
-    
-    for company_id in company_ids:
-        # Get company data
-        company_doc = db.client.collection("companies").document(company_id).get()
-        if not company_doc.exists:
-            continue
-            
-        company = company_doc.to_dict()
-        contributions = company.get("contributions", {})
-        related_individuals = company.get("relatedIndividuals", [])
-        
-        # Add contributions from related individuals
-        for ind in related_individuals:
-            ind_data = (
-                db.client.collection("individuals").document(ind["id"]).get().to_dict()
-            )
-            if not ind_data:
-                continue
-                
-            ind_contribs = ind_data.get("contributions", [])
-            for group_data in ind_contribs:
-                recipient = group_data["committee_id"]
-                contribs_with_attribution = [
-                    {**c, "isIndividual": True, "individual": ind["id"]}
-                    for c in group_data["contributions"]
-                ]
-                if recipient not in contributions:
-                    contributions[recipient] = {
-                        "contributions": [],
-                        "total": 0,
-                        "committee_id": recipient,
-                    }
-                
-                # Add to recipients tracking
-                if recipient not in all_recipients:
-                    new_recipients.add(recipient)
-                    all_recipients[recipient] = {
-                        "committee_id": recipient,
-                        "candidate_details": {},
-                        "needs_data": True,
-                    }
-                
-                contributions[recipient]["contributions"].extend(
-                    contribs_with_attribution
-                )
-                contributions[recipient]["total"] += group_data["total"]
-        
-        # Update the company with new contribution data
-        sorted_contributions = sorted(
-            contributions.values(), key=lambda x: x["total"], reverse=True
-        )
-        db.client.collection("companies").document(company_id).set(
-            {"contributions": sorted_contributions}, merge=True
-        )
-    
-    # Update recipients if there are new ones
-    if new_recipients:
-        recipients = get_missing_recipient_data(all_recipients, db)
-        db.client.collection("allRecipients").document("recipients").set(recipients)
-    
-    return new_recipients
-from company_spending import update_spending_by_company
-from process_company_contributions import process_company_contributions
 
 
 def add_individual(individual_id: str, individual_data: dict, fetch_immediately: bool = True):

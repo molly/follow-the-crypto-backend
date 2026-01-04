@@ -82,12 +82,12 @@ def get_missing_recipient_data(recipients, db, session):
             candidate_data[candidate_id]["isRunningThisCycle"] = (
                 2026 in candidate["election_years"]
             )
-            race_data = (
+            race_doc = (
                 db.client.collection("raceDetails")
                 .document(candidate["state"])
                 .get()
-                .to_dict()
             )
+            race_data = race_doc.to_dict() if race_doc.exists else None
             if race_data:
                 if candidate["office"] == "S" and "S" in race_data:
                     candidate_data[candidate_id][
