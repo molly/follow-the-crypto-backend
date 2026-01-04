@@ -98,6 +98,14 @@ Examples:
     parser.add_argument(
         "--continue-on-failure",
         action="store_true",
+        help="Continue running other tasks if one fails",
+    )
+
+    parser.add_argument(
+        "--individual-ids",
+        type=str,
+        help="Comma-separated list of individual IDs to process (for individual-related tasks)",
+    )
         help="Continue execution even if a task fails",
     )
 
@@ -162,6 +170,12 @@ def main():
         task_names = [t.strip() for t in args.tasks.split(",")]
         print(f"\nRequested tasks: {', '.join(task_names)}")
 
+    # Parse individual IDs if provided
+    individual_ids = None
+    if args.individual_ids:
+        individual_ids = [i.strip() for i in args.individual_ids.split(",")]
+        print(f"\nTarget individuals: {', '.join(individual_ids)}")
+
     # Validate registry
     try:
         registry.validate()
@@ -184,6 +198,7 @@ def main():
             force=args.force,
             dry_run=args.dry_run,
             stop_on_failure=not args.continue_on_failure,
+            individual_ids=individual_ids,  # Pass individual IDs to orchestrator
         )
 
         # Determine exit code based on results
