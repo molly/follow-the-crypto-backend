@@ -1,7 +1,7 @@
 from get_missing_recipients import get_missing_recipient_data
 
 
-def process_company_contributions(db):
+def process_company_contributions(db, session):
     all_recipients = (
         db.client.collection("allRecipients").document("recipients").get().to_dict()
     )
@@ -39,7 +39,7 @@ def process_company_contributions(db):
         )
 
     # Get recipient data and record any new committees
-    recipients = get_missing_recipient_data(all_recipients, db)
+    recipients = get_missing_recipient_data(all_recipients, db, session)
     db.client.collection("allRecipients").document("recipients").set(recipients)
 
     # Bring in spending by related individuals

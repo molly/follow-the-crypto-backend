@@ -37,8 +37,8 @@ def chunk(lst, chunk_size=10):
     max_tries=5,
     giveup=fatal_code,
 )
-def FEC_fetch(description, url, params={}):
-    r = requests.get(
+def FEC_fetch(session, description, url, params={}):
+    r = session.get(
         url,
         params={
             **params,
@@ -93,12 +93,6 @@ def get_expenditure_race_type(expenditure, races=None):
     if subrace is not None:
         return subrace
 
-    if (
-        expenditure.get("candidate_name") == "ONDER"
-        and expenditure.get("dissemination_date") == "2025-07-25"
-    ):
-        # Screwy date on an expenditure
-        expenditure["dissemination_date"] = "2024-07-25"
     election_type = expenditure.get("election_type", None)
     if election_type is None:
         if races is None:

@@ -39,7 +39,7 @@ def get_race_name(expenditure):
     return race
 
 
-def update_committee_expenditures(db):
+def update_committee_expenditures(db, session):
     """
     Fetch processed transactions, and any transactions that have been efiled but not yet processed.
     These are stored raw in expenditures.all, and processed later in process_committee_expenditures.py.
@@ -53,6 +53,7 @@ def update_committee_expenditures(db):
         # First fetch processed expenditures
         while True:
             data = FEC_fetch(
+                session,
                 "committee expenditures",
                 "https://api.open.fec.gov/v1/schedules/schedule_e",
                 params={
@@ -60,7 +61,7 @@ def update_committee_expenditures(db):
                     "per_page": 100,
                     "is_notice": True,
                     "most_recent": True,
-                    "cycle": 2024,
+                    "cycle": 2026,
                     "last_index": last_index,
                     "last_expenditure_date": last_expenditure_date,
                 },
@@ -100,6 +101,7 @@ def update_committee_expenditures(db):
         page = 1
         while True:
             data = FEC_fetch(
+                session,
                 "unprocessed committee expenditures",
                 "https://api.open.fec.gov/v1/schedules/schedule_e/efile",
                 params={
@@ -147,14 +149,15 @@ def update_committee_expenditures(db):
                 page += 1
 
     # Diff with previously stored expenditures
+    new_transactions = {}
     old_transactions = (
         db.client.collection("expenditures").document("all").get().to_dict()
     )
-    old_transaction_ids = set(old_transactions.keys())
-    diff_ids = set(transactions.keys()).difference(old_transaction_ids)
-    new_transactions = {}
-    if diff_ids:
-        new_transactions = {x: transactions[x] for x in diff_ids}
+    if old_transactions:
+        old_transaction_ids = set(old_transactions.keys())
+        diff_ids = set(transactions.keys()).difference(old_transaction_ids)
+        if diff_ids:
+            new_transactions = {x: transactions[x] for x in diff_ids}
 
     db.client.collection("expenditures").document("all").set(transactions)
     return new_transactions

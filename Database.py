@@ -1,13 +1,18 @@
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials
+from google.cloud import firestore
 import re
 
 
 class Database:
     def __init__(self):
         cred = credentials.Certificate("service.json")
-        firebase_admin.initialize_app(cred)
-        self.client = firestore.client()
+        app = firebase_admin.initialize_app(cred)
+        gcreds = app.credential.get_credential()
+        project_id = app.project_id
+        self.client = firestore.Client(
+            credentials=gcreds, project=project_id, database="follow-the-crypto-2026"
+        )
         self.committees = None
         self.company_aliases = None
         self.individual_employers = None

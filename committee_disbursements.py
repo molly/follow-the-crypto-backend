@@ -9,7 +9,7 @@ DISBURSEMENT_FIELDS = [
 ]
 
 
-def update_committee_disbursements(db):
+def update_committee_disbursements(db, session):
     committees = db.client.collection("committees").stream()
     new_disbursements = {}
     total_receipts = 0
@@ -23,11 +23,12 @@ def update_committee_disbursements(db):
             disbursements_count = 0
             while True:
                 data = FEC_fetch(
+                    session,
                     "committee disbursements",
                     "https://api.open.fec.gov/v1/schedules/schedule_b",
                     params={
                         "committee_id": committee_id,
-                        "two_year_transaction_period": 2024,
+                        "two_year_transaction_period": 2026,
                         "line_number": "F3X-22",
                         "last_index": last_index,
                         "last_disbursement_date": last_disbursement_date,

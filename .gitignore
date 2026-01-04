@@ -162,3 +162,4 @@ service.json
 msecrets.py
 races.py
 .DS_Store
+cache/

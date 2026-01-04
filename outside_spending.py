@@ -21,7 +21,7 @@ def split_into_chunks(array):
     return [array[i : i + 10] for i in range(0, len(array), 10)]
 
 
-def update_candidate_outside_spending(db):
+def update_candidate_outside_spending(db, session):
     try:
         race_docs = db.client.collection("raceDetails").stream()
         docs = [doc for doc in race_docs]
@@ -44,12 +44,13 @@ def update_candidate_outside_spending(db):
                     transaction_ids = set()
                     while True:
                         candidate_data = FEC_fetch(
+                            session,
                             "outside spending for candidates",
                             "https://api.open.fec.gov/v1/schedules/schedule_e",
                             {
                                 "candidate_id": chunk,
                                 "per_page": 100,
-                                "cycle": 2024,
+                                "cycle": 2026,
                                 "is_notice": True,
                                 "most_recent": True,
                                 "last_index": last_index,
@@ -118,6 +119,7 @@ def update_candidate_outside_spending(db):
                     page = 1
                     while True:
                         candidate_data = FEC_fetch(
+                            session,
                             "outside spending for candidates",
                             "https://api.open.fec.gov/v1/schedules/schedule_e/efile",
                             {

@@ -1,12 +1,20 @@
+from pipeline_core.task import task
 from utils import FEC_fetch, pick
 
 
-def hydrate_committees(db, session):
-    """
-    Fetch committee details for the list of committees in the constants section of the database.
-    TODO: Dynamically find committees?
-    """
+@task(
+    name="hydrate_committees",
+    depends_on=[],
+    outputs=["committees", "totals"],
+)
+def hydrate_committees(context):
+    """Fetch committee details and totals from FEC API."""
+    db = context.db
+    session = context.session
+
     combined_committee_totals = {"receipts": 0, "expenditures": 0, "disbursements": 0}
+    committees_processed = 0
+
     for committee in db.committees.values():
         details_data = FEC_fetch(
             session,
@@ -78,6 +86,7 @@ def hydrate_committees(db, session):
             db.client.collection("committees").document(committee["id"]).set(
                 committee_data
             )
+            committees_processed += 1
 
     combined_committee_totals["receipts"] = round(
         combined_committee_totals["receipts"], 2
@@ -89,3 +98,5 @@ def hydrate_committees(db, session):
         combined_committee_totals["disbursements"], 2
     )
     db.client.collection("totals").document("committees").set(combined_committee_totals)
+
+    return {"committees_processed": committees_processed, "totals": combined_committee_totals}

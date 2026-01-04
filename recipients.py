@@ -125,14 +125,12 @@ def summarize_recipients(db):
     candidates_with_expenditures_ids = set(
         [cand.get("candidate_id") for cand in expenditures]
     )
-    to_omit = {"H0CA27085", "H6IN03229"}  # One-off candidates with multiple IDs, etc
     candidates_without_expenditures = [
         x
         for x in order
         if (
             x[0] != "C"
             and x not in candidates_with_expenditures_ids
-            and x not in to_omit
             and recipients[x]
             .get("candidate_details", {})
             .get("isRunningThisCycle", False)

@@ -63,7 +63,7 @@ def get_last_index_with_donation(sorted_candidates, candidates_data):
     return -1
 
 
-def summarize_races(db):
+def summarize_races(db, session):
     race_docs_stream = db.client.collection("raceDetails").stream()
     race_docs = [doc for doc in race_docs_stream]
     all_expenditures = (
@@ -132,7 +132,7 @@ def summarize_races(db):
             params = {
                 "office": race_id_split[0],
                 "state": state,
-                "election_year": 2024,
+                "election_year": 2026,
                 "q": map(trim_name, candidates),
                 "per_page": 50,
             }
@@ -144,6 +144,7 @@ def summarize_races(db):
                 params["district"] = race_id_split[1]
 
             FEC_candidates_data = FEC_fetch(
+                session,
                 f"candidates data for {state}",
                 "https://api.open.fec.gov/v1/candidates/search",
                 params,
@@ -206,6 +207,7 @@ def summarize_races(db):
                         # A few weird edge cases are in the candidates constant, get that data here
                         c_id = db.candidates[entry["common_name"]]
                         FEC_candidates_data = FEC_fetch(
+                            session,
                             f"candidates data for {state}",
                             "https://api.open.fec.gov/v1/candidates/search",
                             {"candidate_id": [c_id]},
@@ -435,10 +437,11 @@ def summarize_races(db):
                 if "candidate_id" in c
             ]
             FEC_totals_data = FEC_fetch(
+                session,
                 "candidate totals",
                 "https://api.open.fec.gov/v1/candidates/totals",
                 {
-                    "cycle": 2024,
+                    "cycle": 2026,
                     "per_page": 50,
                     "candidate_id": candidate_ids,
                 },

@@ -103,6 +103,11 @@ to_skip = {
     "Lewie Andrews",
     "Tim Stevenski",
     "Joshua Standridge",
+    "Sarah Williams",
+    "Joshua Lanzara",
+    "Brent Lewis",
+    "Charlie Jackson",
+    "Melanie Ram",
 }
 
 

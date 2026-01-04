@@ -2,7 +2,7 @@ from fetch_committee_contributions import (
     should_omit,
     get_ids_to_omit,
 )
-from utils import openSecrets_fetch, FEC_fetch, pick
+from utils import FEC_fetch, pick
 
 
 PICKED_FIELDS = [
@@ -55,7 +55,7 @@ def process_contribution(contrib):
     return contribution
 
 
-def update_spending_by_company(db):
+def update_spending_by_company(db, session):
     for str_id, company in db.companies.items():
         # Sync companies with the constants dict
         related_individuals = [
@@ -83,11 +83,12 @@ def update_spending_by_company(db):
         if str_id != "paradigm" and str_id != "gemini":
             while True:
                 contribution_data = FEC_fetch(
+                    session,
                     "company contributions",
                     "https://api.open.fec.gov/v1/schedules/schedule_a/",
                     params={
                         "contributor_name": company_search_id,
-                        "two_year_transaction_period": "2024",
+                        "two_year_transaction_period": "2026",
                         "per_page": "100",
                         "sort": "-contribution_receipt_date",
                         "last_index": last_index,
@@ -123,6 +124,7 @@ def update_spending_by_company(db):
         if str_id != "paradigm" and str_id != "gemini":
             while True:
                 data = FEC_fetch(
+                    session,
                     "unprocessed committee contributions",
                     "https://api.open.fec.gov/v1/schedules/schedule_a/efile",
                     params={
