@@ -93,12 +93,14 @@ def summarize_races(db, session):
 
             # Create set for each unique candidate in any sub-race in this race. This will always be equivalent to
             # Object.keys(candidates_data) and is just maintained for convenience.
-            candidates = {
-                candidate["name"]
-                for race in race_data["races"]
-                for candidate in race["candidates"]
-            }
-
+            try:
+                candidates = {
+                    candidate["name"]
+                    for race in race_data["races"]
+                    for candidate in race["candidates"]
+                }
+            except KeyError as e:
+                logging.error(f"Missing race data for {state} {race_id}")
             # Create dict with an entry for each candidate. This dict will eventually be saved to the "candidates" field
             # in the race entry.
             candidates_data = {
@@ -229,10 +231,7 @@ def summarize_races(db, session):
                             "FEC_name"
                         ] = FEC_candidate_data["name"]
                     else:
-                        print(
-                            f"Having trouble locating FEC candidate: {entry['common_name']} in {state}-{race_id}"
-                        )
-                        logging.info(
+                        logging.debug(
                             f"Having trouble locating FEC candidate: {entry['common_name']} in {state}-{race_id}"
                         )
 
@@ -319,9 +318,6 @@ def summarize_races(db, session):
                         k = ks.pop()
                     if k is None:
                         # TODO: We're going to have to figure out something else if we end up here.
-                        print(
-                            f"Having trouble locating candidate named in expenditure: {expenditure['candidate_name']} in {state} {race_id}"
-                        )
                         logging.error(
                             f"Having trouble locating candidate named in expenditure: {expenditure['candidate_name']} in {state} {race_id}"
                         )
@@ -395,7 +391,6 @@ def summarize_races(db, session):
                     candidates_data[candidate]["support_total"] == 0
                     and candidates_data[candidate]["oppose_total"] == 0
                     and candidates_data[candidate].get("candidate_id", "")
-                    not in {"S0WV00090", "H4OR05320"}
                 ):
                     # There can be a lot of withdrawn candidates, so only keep those involved in some expenditure
                     del candidates_data[candidate]
