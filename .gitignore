@@ -163,3 +163,4 @@ msecrets.py
 races.py
 .DS_Store
 cache/
+.env

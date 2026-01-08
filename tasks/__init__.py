@@ -6,9 +6,8 @@ from . import contributions
 from . import expenditures
 from . import disbursements
 from . import individuals
-from . import individuals_selective  # New selective individual tasks
-from . import company_dependencies  # Company dependency handling
-from . import daily_operations  # Daily operation optimizations
+from . import individuals_selective 
+from . import company_dependencies  
 from . import companies
 from . import races
 from . import candidates

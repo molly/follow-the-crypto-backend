@@ -9,6 +9,7 @@ Usage:
 
 import argparse
 import logging
+import requests
 from Database import Database
 from individuals import update_spending_by_individuals
 from process_individual_contributions import process_individual_contributions
@@ -43,8 +44,10 @@ def update_specific_companies(db, individual_data, individual_id):
     db.companies = temp_companies
     
     try:
+        # Create session for API calls
+        session = requests.Session()
         # Update company spending for just these companies
-        update_spending_by_company(db)
+        update_spending_by_company(db, session)
         
         # Restore full companies list
         db.companies = original_companies

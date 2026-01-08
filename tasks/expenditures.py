@@ -29,8 +29,8 @@ def process_expenditures(context):
 
 @task(
     name="update_candidate_expenditures",
-    depends_on=["process_expenditures"],
-    inputs=["expenditures"],
+    depends_on=["summarize_races"],
+    inputs=["expenditures", "raceSummaries"],
 )
 def update_candidate_expenditures(context):
     """Group expenditures by candidate."""

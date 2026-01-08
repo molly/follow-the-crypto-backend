@@ -14,6 +14,7 @@ import logging
     name="fetch_individual_spending_selective",
     depends_on=["hydrate_committees"],
     outputs=["rawIndividualSpending"],
+    run_by_default=False,
 )
 def fetch_individual_spending_selective(context, individual_ids=None):
     """
@@ -53,6 +54,7 @@ def fetch_individual_spending_selective(context, individual_ids=None):
     depends_on=["fetch_individual_spending_selective"],
     inputs=["rawIndividualSpending"],
     outputs=["companies"],
+    run_by_default=False,
 )
 def process_individual_contributions_selective(context, individual_ids=None):
     """
@@ -78,6 +80,7 @@ def process_individual_contributions_selective(context, individual_ids=None):
     name="add_and_process_individual",
     depends_on=["hydrate_committees"],
     outputs=["rawIndividualSpending", "companies"],
+    run_by_default=False,
 )
 def add_and_process_individual(context, individual_id, individual_data):
     """
@@ -115,10 +118,10 @@ def add_and_process_individual(context, individual_id, individual_data):
         logging.info(f"Updating company data for associated companies: {individual_data['company']}")
         
         # Update company spending to refresh relatedIndividuals
-        update_spending_by_company(context.db)
+        update_spending_by_company(context.db, context.session)
         
         # Process company contributions to include this individual's data
-        company_new_recipients = process_company_contributions(context.db)
+        company_new_recipients = process_company_contributions(context.db, context.session)
         
         companies_updated = True
         company_result = {

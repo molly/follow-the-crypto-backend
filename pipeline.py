@@ -55,6 +55,7 @@ Examples:
   %(prog)s --dry-run                          Show what would run
   %(prog)s --list-tasks                       List all available tasks
   %(prog)s --clear-cache --force              Clear cache and re-run everything
+  %(prog)s --tasks failing_task --skip-deps   Run specific task without dependencies
         """,
     )
 
@@ -102,11 +103,15 @@ Examples:
     )
 
     parser.add_argument(
+        "--skip-deps",
+        action="store_true",
+        help="Skip dependencies and run only the specified tasks",
+    )
+
+    parser.add_argument(
         "--individual-ids",
         type=str,
         help="Comma-separated list of individual IDs to process (for individual-related tasks)",
-    )
-        help="Continue execution even if a task fails",
     )
 
     return parser.parse_args()
@@ -198,7 +203,7 @@ def main():
             force=args.force,
             dry_run=args.dry_run,
             stop_on_failure=not args.continue_on_failure,
-            individual_ids=individual_ids,  # Pass individual IDs to orchestrator
+            skip_deps=args.skip_deps,
         )
 
         # Determine exit code based on results

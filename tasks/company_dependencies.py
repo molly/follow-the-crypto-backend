@@ -48,11 +48,11 @@ def update_companies_for_individuals(context, individual_ids=None):
     
     # Update company spending data (refreshes relatedIndividuals lists)
     logging.info("Updating company spending data...")
-    update_spending_by_company(context.db)
+    update_spending_by_company(context.db, context.session)
     
     # Process company contributions (includes individual contributions)  
     logging.info("Processing company contributions with individual data...")
-    new_recipients = process_company_contributions(context.db)
+    new_recipients = process_company_contributions(context.db, context.session)
     
     return {
         "status": "success",
@@ -63,9 +63,10 @@ def update_companies_for_individuals(context, individual_ids=None):
 
 
 @task(
-    name="complete_individual_workflow", 
+    name="complete_individual_workflow",
     depends_on=["fetch_individual_spending_selective"],
     outputs=["companies", "individuals"],
+    run_by_default=False,
 )
 def complete_individual_workflow(context, individual_ids):
     """

@@ -36,6 +36,7 @@ class PipelineOrchestrator:
         self,
         task_names: Optional[List[str]] = None,
         force: bool = False,
+        skip_deps: bool = False,
     ) -> List[Task]:
         """
         Build an execution plan for tasks.
@@ -43,6 +44,7 @@ class PipelineOrchestrator:
         Args:
             task_names: List of task names to execute. If None, executes all tasks.
             force: If True, force execution of all tasks even if already completed
+            skip_deps: If True, skip dependencies and run only specified tasks
 
         Returns:
             List of tasks in execution order
@@ -50,8 +52,21 @@ class PipelineOrchestrator:
         Raises:
             ValueError: If task names are invalid or dependencies can't be resolved
         """
-        # Resolve dependencies to get tasks in execution order
-        tasks = self.registry.resolve_dependencies(task_names)
+        if skip_deps and task_names:
+            # Skip dependencies and run only specified tasks
+            tasks = []
+            for name in task_names:
+                if self.registry.has_task(name):
+                    tasks.append(self.registry.get_task(name))
+                else:
+                    raise ValueError(f"Unknown task: '{name}'")
+        else:
+            # Resolve dependencies to get tasks in execution order
+            tasks = self.registry.resolve_dependencies(task_names)
+
+        # If no specific tasks requested, filter out tasks marked run_by_default=False
+        if task_names is None:
+            tasks = [t for t in tasks if t.run_by_default]
 
         # Filter out tasks that don't need execution (unless force=True)
         if not force:
@@ -179,6 +194,7 @@ class PipelineOrchestrator:
         force: bool = False,
         dry_run: bool = False,
         stop_on_failure: bool = True,
+        skip_deps: bool = False,
     ) -> Dict[str, Any]:
         """
         Build and execute a pipeline.
@@ -190,9 +206,10 @@ class PipelineOrchestrator:
             force: If True, force execution of all tasks
             dry_run: If True, only print what would be executed
             stop_on_failure: If True, stop execution on first failure
+            skip_deps: If True, skip dependencies and run only specified tasks
 
         Returns:
             Dictionary with execution results
         """
-        plan = self.build_execution_plan(task_names, force)
+        plan = self.build_execution_plan(task_names, force, skip_deps)
         return self.execute(plan, dry_run, stop_on_failure)

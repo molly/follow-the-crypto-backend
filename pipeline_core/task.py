@@ -14,6 +14,7 @@ class Task:
         inputs: List of Firestore collections this task reads from
         outputs: List of Firestore collections this task writes to
         description: Human-readable description of what the task does
+        run_by_default: Whether to include this task in default pipeline runs
     """
 
     name: str
@@ -22,6 +23,7 @@ class Task:
     inputs: List[str] = field(default_factory=list)
     outputs: List[str] = field(default_factory=list)
     description: Optional[str] = None
+    run_by_default: bool = True
 
     def __post_init__(self):
         if self.description is None and self.func.__doc__:
@@ -41,6 +43,7 @@ def task(
     depends_on: Optional[List[str]] = None,
     inputs: Optional[List[str]] = None,
     outputs: Optional[List[str]] = None,
+    run_by_default: bool = True,
 ):
     """
     Decorator to register a function as a pipeline task.
@@ -61,6 +64,7 @@ def task(
         depends_on: List of task names this task depends on
         inputs: List of Firestore collections this task reads from
         outputs: List of Firestore collections this task writes to
+        run_by_default: Whether to include in default pipeline runs (default: True)
     """
 
     def decorator(func: Callable) -> Task:
@@ -72,6 +76,7 @@ def task(
             depends_on=depends_on or [],
             inputs=inputs or [],
             outputs=outputs or [],
+            run_by_default=run_by_default,
         )
 
         # Register the task

@@ -232,7 +232,7 @@ def summarize_races(db, session):
                         print(
                             f"Having trouble locating FEC candidate: {entry['common_name']} in {state}-{race_id}"
                         )
-                        logging.error(
+                        logging.info(
                             f"Having trouble locating FEC candidate: {entry['common_name']} in {state}-{race_id}"
                         )
 
