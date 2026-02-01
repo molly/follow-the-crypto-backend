@@ -107,7 +107,7 @@ def update_committee_expenditures(db, session):
                 params={
                     "committee_id": committee_id,
                     "per_page": 100,
-                    "min_date": "2023-01-01",
+                    "min_date": "2025-01-01",
                     "sort": "-expenditure_date",
                     "is_notice": True,
                     "most_recent": True,

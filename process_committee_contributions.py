@@ -199,15 +199,17 @@ def process_contribution(contrib, db, donorMap):
                 ] = contrib["contribution_receipt_date"]
 
             # Update the aggregate YTD contribution if this is a new high
-            if "contributor_aggregate_ytd" in contrib and (
-                contrib["contributor_aggregate_ytd"]
-                > donorMap["groups"][group]["rollup"][contrib["contributor_name"]][
-                    "contributor_aggregate_ytd"
+            if "contributor_aggregate_ytd" in contrib:
+                current_aggregate = contrib["contributor_aggregate_ytd"] or 0
+                rollup_entry = donorMap["groups"][group]["rollup"][
+                    contrib["contributor_name"]
                 ]
-            ):
-                donorMap["groups"][group]["rollup"][contrib["contributor_name"]][
-                    "contributor_aggregate_ytd"
-                ] = contrib["contributor_aggregate_ytd"]
+                existing_aggregate = rollup_entry.get("contributor_aggregate_ytd") or 0
+
+                if current_aggregate > existing_aggregate:
+                    rollup_entry["contributor_aggregate_ytd"] = contrib[
+                        "contributor_aggregate_ytd"
+                    ]
 
     # Update the total contributions count and amount for the group, regardless of whether this is going in
     # a rollup
@@ -230,7 +232,7 @@ def process_committee_contributions(db):
         donorMap = {
             "contributions_count": 0,
             "groups": {},
-            "recent": [],
+            "by_date": [],
             "total_contributed": 0,
             "total_transferred": 0,
         }
@@ -283,11 +285,11 @@ def process_committee_contributions(db):
             del donorMap["groups"][group]["rollup"]
 
             # Sort the list of all contributions by receipt date
-            donorMap["recent"] = sorted(
+            donorMap["by_date"] = sorted(
                 all_contribs,
                 key=lambda x: x["contribution_receipt_date"],
                 reverse=True,
-            )[:10]
+            )
 
         # Turn the map of groups into a list, sorted descending by total contributions
         donor_list = [

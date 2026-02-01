@@ -129,7 +129,7 @@ def update_spending_by_company(db, session):
                     "https://api.open.fec.gov/v1/schedules/schedule_a/efile",
                     params={
                         "contributor_name": company_search_id,
-                        "min_date": "2023-01-01",
+                        "min_date": "2025-01-01",
                         "per_page": 100,
                         "sort": "-contribution_receipt_date",
                         "page": page,

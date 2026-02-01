@@ -125,7 +125,7 @@ def update_candidate_outside_spending(db, session):
                             {
                                 "candidate_id": chunk,
                                 "per_page": 100,
-                                "min_date": "2023-01-01",
+                                "min_date": "2025-01-01",
                                 "is_notice": True,
                                 "most_recent": True,
                                 "page": page,
