@@ -39,7 +39,7 @@ def get_ids_to_omit(contribs):
 
 def should_omit(contrib, other_contribs, ids_to_omit):
     """Omit any duplicate contributions, refunds, etc."""
-    if contrib["line_number"] in ["15", "16"]:
+    if contrib["line_number"] in ["15", "16", "17"]:
         return True
     if contrib["transaction_id"] in ids_to_omit:
         # Manually excluded transaction, or a parent of a more granularly reported transaction
