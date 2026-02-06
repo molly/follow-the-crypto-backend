@@ -19,6 +19,9 @@ def get_race_name(expenditure):
         and int(expenditure["candidate_office_district"]) != 0
     ):
         race += "-" + expenditure["candidate_office_district"]
+    election_type = expenditure.get("election_type") or ""
+    if election_type.startswith("S"):
+        race += "-special"
     return race
 
 

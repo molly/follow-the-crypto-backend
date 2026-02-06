@@ -7,6 +7,7 @@ Usage:
     python pipeline.py --force                  # Force re-run all tasks
     python pipeline.py --tasks task1,task2      # Run specific tasks and their dependencies
     python pipeline.py --dry-run                # Show execution plan without running
+    python pipeline.py --skip task1,task2        # Run all tasks except these
     python pipeline.py --clear-cache            # Clear HTTP cache before running
     python pipeline.py --verbose                # Enable verbose logging
 """
@@ -54,6 +55,7 @@ Examples:
   %(prog)s --tasks fetch_ads,process_contribs Run multiple tasks
   %(prog)s --dry-run                          Show what would run
   %(prog)s --list-tasks                       List all available tasks
+  %(prog)s --skip fetch_ads,process_contribs  Skip specific tasks
   %(prog)s --clear-cache --force              Clear cache and re-run everything
   %(prog)s --tasks failing_task --skip-deps   Run specific task without dependencies
         """,
@@ -63,6 +65,12 @@ Examples:
         "--tasks",
         type=str,
         help="Comma-separated list of task names to run (with dependencies)",
+    )
+
+    parser.add_argument(
+        "--skip",
+        type=str,
+        help="Comma-separated list of task names to skip (run everything else)",
     )
 
     parser.add_argument(
@@ -175,6 +183,12 @@ def main():
         task_names = [t.strip() for t in args.tasks.split(",")]
         print(f"\nRequested tasks: {', '.join(task_names)}")
 
+    # Parse skip list if provided
+    skip_tasks = None
+    if args.skip:
+        skip_tasks = [t.strip() for t in args.skip.split(",")]
+        print(f"\nSkipping tasks: {', '.join(skip_tasks)}")
+
     # Parse individual IDs if provided
     individual_ids = None
     if args.individual_ids:
@@ -204,6 +218,7 @@ def main():
             dry_run=args.dry_run,
             stop_on_failure=not args.continue_on_failure,
             skip_deps=args.skip_deps,
+            skip_tasks=skip_tasks,
         )
 
         # Determine exit code based on results

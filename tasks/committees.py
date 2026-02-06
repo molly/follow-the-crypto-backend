@@ -12,7 +12,12 @@ def hydrate_committees(context):
     db = context.db
     session = context.session
 
-    combined_committee_totals = {"receipts": 0, "expenditures": 0, "disbursements": 0}
+    combined_committee_totals = {
+        "receipts": 0,
+        "expenditures": 0,
+        "disbursements": 0,
+        "cash_on_hand": 0,
+    }
     committees_processed = 0
 
     for committee in db.committees.values():
@@ -82,6 +87,9 @@ def hydrate_committees(context):
                     "independent_expenditures"
                 ]
                 combined_committee_totals["disbursements"] += totals["disbursements"]
+                combined_committee_totals["cash_on_hand"] += totals.get(
+                    "last_cash_on_hand_end_period", 0
+                )
 
             db.client.collection("committees").document(committee["id"]).set(
                 committee_data
@@ -97,6 +105,12 @@ def hydrate_committees(context):
     combined_committee_totals["disbursements"] = round(
         combined_committee_totals["disbursements"], 2
     )
+    combined_committee_totals["cash_on_hand"] = round(
+        combined_committee_totals["cash_on_hand"], 2
+    )
     db.client.collection("totals").document("committees").set(combined_committee_totals)
 
-    return {"committees_processed": committees_processed, "totals": combined_committee_totals}
+    return {
+        "committees_processed": committees_processed,
+        "totals": combined_committee_totals,
+    }

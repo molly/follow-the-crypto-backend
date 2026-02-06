@@ -109,8 +109,8 @@ def process_company_contributions(db, session):
                     ]
                     if len(set(parties)) == 1 and not parties[0].startswith("N"):
                         party = parties[0]
-                if party not in party_summary:
-                    party_summary[party] = 0
+            if party not in party_summary:
+                party_summary[party] = 0
             party_summary[party] += group_data["total"]
 
         sorted_contributions = sorted(

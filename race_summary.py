@@ -131,10 +131,11 @@ def summarize_races(db, session):
                     }
 
             # Try to get candidate data from FEC
+            election_year = race_data.get("year", 2026)
             params = {
                 "office": race_id_split[0],
                 "state": state,
-                "election_year": 2026,
+                "election_year": election_year,
                 "q": map(trim_name, candidates),
                 "per_page": 50,
             }
@@ -297,6 +298,14 @@ def summarize_races(db, session):
                             candidates_data[candidate["name"]]["defeated_race"] = race[
                                 "type"
                             ]
+                    if "declined" in candidate and candidate["declined"] is True:
+                        candidates_data[candidate["name"]]["declined"] = True
+                        if "declinedReason" in candidate:
+                            candidates_data[candidate["name"]][
+                                "declinedReason"
+                            ] = candidate["declinedReason"]
+                    if "declared" in candidate and candidate["declared"] is False:
+                        candidates_data[candidate["name"]]["declared"] = False
 
             # Iterate through each expenditure in this race
             for expenditure_id in race_expenditures:
@@ -383,6 +392,7 @@ def summarize_races(db, session):
                         "oppose"
                     ] += expenditure["expenditure_amount"]
 
+            # Handle candidates who have withdrawn
             withdrawn_candidates = (
                 list(race_data["withdrew"].keys()) if "withdrew" in race_data else []
             )
