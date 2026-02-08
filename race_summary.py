@@ -88,6 +88,20 @@ def summarize_races(db, session):
             race_expenditures = races_expenditures.get(full_race_id, {}).get(
                 "expenditures", []
             )
+
+            # Deduplicate candidates in each sub-race (cleanup from previous bug).
+            # Prefer non-withdrawn versions of candidates.
+            for race in race_data.get("races", []):
+                candidates_by_name = {}
+                for candidate in race.get("candidates", []):
+                    name = candidate["name"]
+                    if name not in candidates_by_name:
+                        candidates_by_name[name] = candidate
+                    elif "withdrew_race" in candidates_by_name[name] and "withdrew_race" not in candidate:
+                        # Replace withdrawn version with non-withdrawn version
+                        candidates_by_name[name] = candidate
+                race["candidates"] = list(candidates_by_name.values())
+
             # Get total spending for each candidate, by committee, by race
             spending = {}
 
@@ -431,9 +445,15 @@ def summarize_races(db, session):
                             None,
                         )
                         if matching is not None:
-                            race_data["races"][matching]["candidates"].append(
-                                candidate_details
-                            )
+                            # Only append if not already in the candidate list
+                            existing_names = {
+                                c["name"]
+                                for c in race_data["races"][matching]["candidates"]
+                            }
+                            if candidate_details["name"] not in existing_names:
+                                race_data["races"][matching]["candidates"].append(
+                                    candidate_details
+                                )
 
             # Get total raised for each candidate
             candidate_ids = [

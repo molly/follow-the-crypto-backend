@@ -23,7 +23,7 @@ EXPENDITURE_FIELDS = [
     "support_oppose_indicator",
     "transaction_id",
     # Custom added fields
-    " subrace",
+    "subrace",
     "committee_id",
     "uid",
 ]
@@ -149,15 +149,15 @@ def update_committee_expenditures(db, session):
                 page += 1
 
     # Diff with previously stored expenditures
-    new_transactions = {}
-    old_transactions = (
-        db.client.collection("expenditures").document("all").get().to_dict()
-    )
-    if old_transactions:
-        old_transaction_ids = set(old_transactions.keys())
-        diff_ids = set(transactions.keys()).difference(old_transaction_ids)
-        if diff_ids:
-            new_transactions = {x: transactions[x] for x in diff_ids}
+    # new_transactions = {}
+    # old_transactions = (
+    #     db.client.collection("expenditures").document("all").get().to_dict()
+    # )
+    # if old_transactions:
+    #     old_transaction_ids = set(old_transactions.keys())
+    #     diff_ids = set(transactions.keys()).difference(old_transaction_ids)
+    #     if diff_ids:
+    #         new_transactions = {x: transactions[x] for x in diff_ids}
 
     db.client.collection("expenditures").document("all").set(transactions)
-    return new_transactions
+    # return new_transactions

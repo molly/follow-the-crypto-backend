@@ -5,8 +5,13 @@ def is_below_median(candidate_summary, median_raised):
     return (
         median_raised
         and candidate_summary
-        and "raised_total" in candidate_summary
-        and candidate_summary["raised_total"] < median_raised
+        and (
+            "raised_total" not in candidate_summary
+            or (
+                "raised_total" in candidate_summary
+                and candidate_summary["raised_total"] < median_raised
+            )
+        )
     )
 
 
@@ -42,8 +47,10 @@ def find_index_to_slice(candidate_list, candidate_data):
             candidate_summary.get("support_total", 0) > 0
             or candidate_summary.get("oppose_total", 0) > 0
             or candidate_summary.get("has_non_pac_support", False)
+            or candidate_summary.get("declined", False)
         ):
-            # However, don't remove candidates who have received support or opposition
+            # However, don't remove candidates who have received support or opposition,
+            # or who are notable enough to mention they declined to run
             supported_indices.append(ind + 1)
 
     if slice_ind:

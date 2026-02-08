@@ -15,6 +15,12 @@ to_skip = {
     "Carl Lambrecht",
     "Steve Chasse",
     "Eugene Douglass",
+    "Christopher Manuel Alcantara",
+    "Tevin Channing Minus",
+    "Angela Marie Walls-Windhauser",
+    "Chris Henry",
+    "John Minarcik",
+    "Thomas Rudd"
 }
 
 
