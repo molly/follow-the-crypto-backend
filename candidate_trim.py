@@ -15,6 +15,17 @@ def is_below_median(candidate_summary, median_raised):
     )
 
 
+def move_inactive_candidates_to_end(candidate_list):
+    active = []
+    inactive = []
+    for candidate in candidate_list:
+        if candidate.get("withdrawn") or candidate.get("declined"):
+            inactive.append(candidate)
+        else:
+            active.append(candidate)
+    return active + inactive
+
+
 def find_index_to_slice(candidate_list, candidate_data):
     total_raised = [
         candidate_data[candidate["name"]]["raised_total"]
@@ -33,7 +44,7 @@ def find_index_to_slice(candidate_list, candidate_data):
     for ind, candidate in enumerate(candidate_list):
         name = candidate["name"]
         candidate_summary = candidate_data[name] if name in candidate_data else None
-        if ind > 2 and slice_ind == None:
+        if ind > 2 and slice_ind is None:
             if "percentage" in candidate:
                 if candidate["percentage"] < 5 and is_below_median(
                     candidate_summary, median_raised
@@ -42,6 +53,8 @@ def find_index_to_slice(candidate_list, candidate_data):
                     slice_ind = ind
             elif is_below_median(candidate_summary, median_raised):
                 # Remove candidates who raised below the median amount IF the vote hasn't happened yet
+                slice_ind = ind
+            elif candidate_summary.get("withdrew", False):
                 slice_ind = ind
         if candidate_summary and (
             candidate_summary.get("support_total", 0) > 0
@@ -59,7 +72,7 @@ def find_index_to_slice(candidate_list, candidate_data):
         else:
             to_slice = slice_ind
 
-        if to_slice < len(candidate_list) - 1:
+        if to_slice < len(candidate_list):
             return to_slice
     return None
 
@@ -73,7 +86,9 @@ def trim_candidates(db):
         for race_id, race_data in state_data.items():
             modified_race = False
             for ind, race in enumerate(race_data["races"]):
-                sorted_race_candidates = race["candidates"]
+                sorted_race_candidates = move_inactive_candidates_to_end(
+                    race["candidates"]
+                )
                 if not any("won" in candidate for candidate in race["candidates"]):
                     # This is an upcoming race, so it's not sorted by outcome.
                     # Sort instead by amount raised.
@@ -83,6 +98,9 @@ def trim_candidates(db):
                         .get(c["name"], {})
                         .get("raised_total", 0),
                         reverse=True,
+                    )
+                    sorted_race_candidates = move_inactive_candidates_to_end(
+                        sorted_race_candidates
                     )
                     state_data[race_id]["races"][ind][
                         "candidates"
