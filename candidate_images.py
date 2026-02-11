@@ -20,7 +20,14 @@ to_skip = {
     "Angela Marie Walls-Windhauser",
     "Chris Henry",
     "John Minarcik",
-    "Thomas Rudd"
+    "Thomas Rudd",
+    "David Hatfield",
+    "John Field",
+    "Edward Dunn",
+    "Chandiha Gajapathy",
+    "Gavin Solomon",
+    "Robb Huhn",
+    "Kaley Aldrich"
 }
 
 
