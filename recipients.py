@@ -65,15 +65,19 @@ def summarize_recipients(db):
     if not all_recipient_committees:
         all_recipient_committees = {}
     for doc in db.client.collection("companies").stream():
-        if doc.id == "gemini":
-            continue
         company = doc.to_dict()
         contributions_groups = company["contributions"]
         for group in contributions_groups:
             committee_id = group["committee_id"]
             recipient_committee = all_recipient_committees.get(committee_id)
-            beneficiaries = get_beneficiaries(group, recipient_committee)
+            beneficiaries = get_beneficiaries(
+                group, recipient_committee, db.non_candidate_committees
+            )
             for beneficiary in beneficiaries:
+                # Normalize candidate IDs (e.g., House ID -> Senate ID for candidates
+                # who switched races)
+                if beneficiary in db.candidate_aliases:
+                    beneficiary = db.candidate_aliases[beneficiary]
                 if beneficiary not in recipients:
                     recipients[beneficiary] = {
                         "total": 0,
@@ -125,14 +129,12 @@ def summarize_recipients(db):
     candidates_with_expenditures_ids = set(
         [cand.get("candidate_id") for cand in expenditures]
     )
-    to_omit = {"H0CA27085", "H6IN03229"}  # One-off candidates with multiple IDs, etc
     candidates_without_expenditures = [
         x
         for x in order
         if (
             x[0] != "C"
             and x not in candidates_with_expenditures_ids
-            and x not in to_omit
             and recipients[x]
             .get("candidate_details", {})
             .get("isRunningThisCycle", False)

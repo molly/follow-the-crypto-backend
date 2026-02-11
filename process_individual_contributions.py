@@ -255,10 +255,9 @@ def process_contribution_group(group):
     return contribs_to_keep
 
 
-def process_individual_contributions(db):
-    all_recipients = (
-        db.client.collection("allRecipients").document("recipients").get().to_dict()
-    )
+def process_individual_contributions(db, session):
+    recipients_doc = db.client.collection("allRecipients").document("recipients").get()
+    all_recipients = recipients_doc.to_dict() if recipients_doc.exists else {}
     if not all_recipients:
         all_recipients = {}
     new_recipients = set()
@@ -356,7 +355,7 @@ def process_individual_contributions(db):
         )
 
     # Get recipient data and record any new committees
-    recipients = get_missing_recipient_data(all_recipients, db)
+    recipients = get_missing_recipient_data(all_recipients, db, session)
     db.client.collection("allRecipients").document("recipients").set(recipients)
 
     # Summarize spending by party

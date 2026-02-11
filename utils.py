@@ -37,8 +37,8 @@ def chunk(lst, chunk_size=10):
     max_tries=5,
     giveup=fatal_code,
 )
-def FEC_fetch(description, url, params={}):
-    r = requests.get(
+def FEC_fetch(session, description, url, params={}):
+    r = session.get(
         url,
         params={
             **params,
@@ -93,13 +93,10 @@ def get_expenditure_race_type(expenditure, races=None):
     if subrace is not None:
         return subrace
 
-    if (
-        expenditure.get("candidate_name") == "ONDER"
-        and expenditure.get("dissemination_date") == "2025-07-25"
-    ):
-        # Screwy date on an expenditure
-        expenditure["dissemination_date"] = "2024-07-25"
     election_type = expenditure.get("election_type", None)
+    election_type_full = expenditure.get("election_type_full", None)
+    if election_type_full is not None:
+        election_type_full = election_type_full.lower()
     if election_type is None:
         if races is None:
             # If the expenditure doesn't have an election type (as with efiled expenditures), we have to try to figure it
@@ -150,6 +147,14 @@ def get_expenditure_race_type(expenditure, races=None):
     if election_type == "C":
         return "convention"
     if election_type == "S":
+        split_type = re.split("[- ]", election_type_full)
+        if len(split_type) > 1:
+            if split_type[1] == "primary":
+                return "primary"
+            elif split_type[1] == "runoff":
+                return "primary_runoff"
+            elif split_type[1] == "general":
+                return "general"
         return "special"
     if election_type == "O":
         return "other"
@@ -158,7 +163,12 @@ def get_expenditure_race_type(expenditure, races=None):
         return election_type
 
 
-def get_beneficiaries(contributionGroup, recipientCommittee):
+def get_beneficiaries(contributionGroup, recipientCommittee, nonCandidateCommittees):
+    committee_id = (
+        recipientCommittee["committee_id"] or contributionGroup["committee_id"]
+    )
+    if committee_id in nonCandidateCommittees:
+        return committee_id
     if (
         recipientCommittee
         and "candidate_ids" in recipientCommittee

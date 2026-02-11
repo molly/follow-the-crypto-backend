@@ -69,18 +69,19 @@ def get_ads(db):
             ads_by_committee[ad["committee_id"]] = {"ads": {ad["ad_id"]: ad}}
 
     old_ads = db.client.collection("ads").document("by_committee").get().to_dict()
-    for committee in ads_by_committee:
-        if committee not in old_ads:
-            new_ads[committee] = ads_by_committee[committee]["ads"]
-        else:
-            old_ad_ids = set(old_ads[committee]["ads"].keys())
-            for ad_id in ads_by_committee[committee]["ads"]:
-                if ad_id not in old_ad_ids:
-                    if committee not in new_ads:
-                        new_ads[committee] = {}
-                    new_ads[committee][ad_id] = ads_by_committee[committee]["ads"][
-                        ad_id
-                    ]
+    if old_ads:
+        for committee in ads_by_committee:
+            if committee not in old_ads:
+                new_ads[committee] = ads_by_committee[committee]["ads"]
+            else:
+                old_ad_ids = set(old_ads[committee]["ads"].keys())
+                for ad_id in ads_by_committee[committee]["ads"]:
+                    if ad_id not in old_ad_ids:
+                        if committee not in new_ads:
+                            new_ads[committee] = {}
+                        new_ads[committee][ad_id] = ads_by_committee[committee]["ads"][
+                            ad_id
+                        ]
 
     db.client.collection("ads").document("by_committee").set(ads_by_committee)
     return new_ads

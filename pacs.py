@@ -22,11 +22,12 @@ def get_pac_data(pac, db):
     return pac_data
 
 
-def get_top_raised_by_type(db, committee_type=None):
-    params = {"cycle": 2024, "sort": "-receipts", "per_page": 50}
+def get_top_raised_by_type(db, session, committee_type=None):
+    params = {"cycle": 2026, "sort": "-receipts", "per_page": 50}
     if committee_type:
         params["committee_type"] = committee_type
     top_raised_data = FEC_fetch(
+        session,
         "top PACs by amount raised",
         "https://api.open.fec.gov/v1/totals/pac-party",
         params=params,
@@ -37,9 +38,9 @@ def get_top_raised_by_type(db, committee_type=None):
     return []
 
 
-def get_top_raised_pacs(db):
-    all_pacs = get_top_raised_by_type(db)
-    super_pacs = get_top_raised_by_type(db, "O")
+def get_top_raised_pacs(db, session):
+    all_pacs = get_top_raised_by_type(db, session)
+    super_pacs = get_top_raised_by_type(db, session, "O")
     db.client.collection("allCommittees").document("allPacs").set(
         {"by_receipts": all_pacs}
     )

@@ -1,4 +1,9 @@
+"""
+Process committee contributions from rawContributions to contributions collection.
+"""
+
 import logging
+from datetime import datetime
 from utils import pick
 
 SHARED_CONTRIBUTION_FIELDS = [
@@ -34,6 +39,64 @@ ROLLUP_CONTRIBUTION_FIELDS = [
 ROLLUP_THRESHOLD = 10000
 
 
+def get_contribution_id(contrib):
+    """Generate a unique identifier for a contribution for manual review matching."""
+    if "transaction_id" in contrib and contrib["transaction_id"]:
+        return f"txn_{contrib['transaction_id']}"
+
+    # For rollups or contributions without transaction_id, create a composite key
+    name = contrib.get("contributor_name", "")
+    amount = contrib.get("contribution_receipt_amount") or contrib.get(
+        "total_receipt_amount", 0
+    )
+    date = contrib.get("contribution_receipt_date") or contrib.get("oldest", "")
+    return f"rollup_{name}_{amount}_{date}"
+
+
+def load_manually_reviewed_contributions(db, committee_id):
+    """Load existing manually reviewed contributions from the processed contributions."""
+    try:
+        existing = db.client.collection("contributions").document(committee_id).get()
+        if not existing.exists:
+            return {}
+
+        data = existing.to_dict()
+        manually_reviewed = {}
+
+        # Check all groups for manually reviewed contributions
+        for group in data.get("groups", []):
+            for contrib in group.get("contributions", []):
+                if "manualReview" in contrib and contrib["manualReview"].get(
+                    "reviewed"
+                ):
+                    contrib_id = get_contribution_id(contrib)
+                    manually_reviewed[contrib_id] = contrib
+
+        # Also check by_date list
+        for contrib in data.get("by_date", []):
+            if "manualReview" in contrib and contrib["manualReview"].get("reviewed"):
+                contrib_id = get_contribution_id(contrib)
+                manually_reviewed[contrib_id] = contrib
+
+        return manually_reviewed
+    except Exception as e:
+        logging.warning(f"Error loading manually reviewed contributions: {e}")
+        return {}
+
+
+def should_skip_contribution(contrib):
+    """Check if a contribution should be skipped due to manual review status."""
+    if "manualReview" not in contrib:
+        return False
+
+    manual_review = contrib["manualReview"]
+    if not manual_review.get("reviewed"):
+        return False
+
+    # Skip contributions marked as omit
+    return manual_review.get("status") == "omit"
+
+
 def redact_contribution(d):
     if "redacted" in d and d["redacted"]:
         for k in CONTRIBUTION_FIELDS[0:5]:
@@ -51,7 +114,7 @@ def is_redacted(contrib, allowlists):
     """Redact any names for occupations not captured within the occupationAllowlist."""
     if contrib.get("claimed", False):
         return False
-    if contrib.get("entity_type") in {"ORG", "PAC"} or (
+    if contrib.get("entity_type") in {"ORG", "PAC", "COM"} or (
         not contrib["contributor_first_name"] and not contrib["contributor_last_name"]
     ):
         # No redactions needed if this isn't an individual
@@ -85,7 +148,15 @@ def process_contribution(contrib, db, donorMap):
         contrib["redacted"] = True
 
     # Get group name
-    group = contrib["contributor_employer"] or contrib["contributor_name"]
+    group = None
+    if (
+        "contributor_employer" in contrib
+        and contrib["contributor_employer"]
+        and contrib["contributor_employer"] != "N/A"
+    ):
+        group = contrib["contributor_employer"]
+    else:
+        group = contrib["contributor_name"]
     if group and group in db.individual_employers:
         group = contrib["contributor_name"]
     elif not group:
@@ -199,15 +270,17 @@ def process_contribution(contrib, db, donorMap):
                 ] = contrib["contribution_receipt_date"]
 
             # Update the aggregate YTD contribution if this is a new high
-            if "contributor_aggregate_ytd" in contrib and (
-                contrib["contributor_aggregate_ytd"]
-                > donorMap["groups"][group]["rollup"][contrib["contributor_name"]][
-                    "contributor_aggregate_ytd"
+            if "contributor_aggregate_ytd" in contrib:
+                current_aggregate = contrib["contributor_aggregate_ytd"] or 0
+                rollup_entry = donorMap["groups"][group]["rollup"][
+                    contrib["contributor_name"]
                 ]
-            ):
-                donorMap["groups"][group]["rollup"][contrib["contributor_name"]][
-                    "contributor_aggregate_ytd"
-                ] = contrib["contributor_aggregate_ytd"]
+                existing_aggregate = rollup_entry.get("contributor_aggregate_ytd") or 0
+
+                if current_aggregate > existing_aggregate:
+                    rollup_entry["contributor_aggregate_ytd"] = contrib[
+                        "contributor_aggregate_ytd"
+                    ]
 
     # Update the total contributions count and amount for the group, regardless of whether this is going in
     # a rollup
@@ -226,17 +299,31 @@ def process_committee_contributions(db):
     )
     for doc in raw_committee_contributions:
         committee_id, contributions = doc.id, doc.to_dict()
+
+        # Load existing manually reviewed contributions
+        manually_reviewed = load_manually_reviewed_contributions(db, committee_id)
+        manually_reviewed_ids = set(manually_reviewed.keys())
+
         all_contribs = []
         donorMap = {
             "contributions_count": 0,
             "groups": {},
-            "recent": [],
+            "by_date": [],
             "total_contributed": 0,
             "total_transferred": 0,
         }
 
         redacted_count = 0
         for contrib in contributions["transactions"]:
+            # Skip if this contribution has been manually reviewed
+            contrib_id = get_contribution_id(contrib)
+            if contrib_id in manually_reviewed_ids:
+                continue
+
+            # Skip if marked as omit
+            if should_skip_contribution(contrib):
+                continue
+
             details = process_contribution(contrib, db, donorMap)
             if details is not None:
                 all_contribs.append(details)
@@ -245,8 +332,17 @@ def process_committee_contributions(db):
 
         # Get any claimed contributions
         claimed = get_claimed_contributions(individuals, committee_id)
-        all_contribs += claimed
         for contrib in claimed:
+            # Skip if this contribution has been manually reviewed
+            contrib_id = get_contribution_id(contrib)
+            if contrib_id in manually_reviewed_ids:
+                continue
+
+            # Skip if marked as omit
+            if should_skip_contribution(contrib):
+                continue
+
+            all_contribs.append(contrib)
             process_contribution(contrib, db, donorMap)
 
         for group, data in donorMap["groups"].items():
@@ -267,27 +363,128 @@ def process_committee_contributions(db):
                 # Add to contribs
                 donorMap["groups"][group]["contributions"].append(data["rollup"][name])
 
-            # Sort the per-group contributions list by amount, then by receipt date
-            donorMap["groups"][group]["contributions"] = sorted(
-                donorMap["groups"][group]["contributions"],
-                key=lambda x: (
-                    x["contribution_receipt_amount"]
-                    if "contribution_receipt_amount" in x
-                    else x["total_receipt_amount"],
-                    x["contribution_receipt_date"]
-                    if "contribution_receipt_date" in x
-                    else "0",
-                ),
-                reverse=True,
-            )
+            # Delete the rollup dict, we've merged it into contributions
             del donorMap["groups"][group]["rollup"]
 
-            # Sort the list of all contributions by receipt date
-            donorMap["recent"] = sorted(
-                all_contribs,
-                key=lambda x: x["contribution_receipt_date"],
+        # Merge manually reviewed contributions back in
+        for contrib_id, contrib in manually_reviewed.items():
+            status = contrib.get("manualReview", {}).get("status")
+
+            # For "omit" contributions, store minimal data to preserve the manual review decision
+            # This prevents them from being reprocessed on subsequent runs
+            if status == "omit":
+                # Create minimal contribution with just ID fields and manualReview
+                minimal_contrib = {
+                    "manualReview": contrib["manualReview"],
+                }
+
+                # Include description if present (top-level field)
+                if "description" in contrib:
+                    minimal_contrib["description"] = contrib["description"]
+
+                # Include ID fields needed for matching
+                if "transaction_id" in contrib:
+                    minimal_contrib["transaction_id"] = contrib["transaction_id"]
+                if "contributor_name" in contrib:
+                    minimal_contrib["contributor_name"] = contrib["contributor_name"]
+                if "contribution_receipt_amount" in contrib:
+                    minimal_contrib["contribution_receipt_amount"] = contrib[
+                        "contribution_receipt_amount"
+                    ]
+                elif "total_receipt_amount" in contrib:
+                    minimal_contrib["total_receipt_amount"] = contrib[
+                        "total_receipt_amount"
+                    ]
+                if "contribution_receipt_date" in contrib:
+                    minimal_contrib["contribution_receipt_date"] = contrib[
+                        "contribution_receipt_date"
+                    ]
+                elif "oldest" in contrib:
+                    minimal_contrib["oldest"] = contrib["oldest"]
+
+                # Add to a special OMITTED group that frontend will filter out
+                if "OMITTED" not in donorMap["groups"]:
+                    donorMap["groups"]["OMITTED"] = {
+                        "contributions": [],
+                        "rollup": {},
+                        "total": 0,
+                    }
+                donorMap["groups"]["OMITTED"]["contributions"].append(minimal_contrib)
+                continue
+
+            # Only merge back full contributions with status "verified"
+            if status != "verified":
+                continue
+
+            # Get group name (same logic as in process_contribution)
+            group = contrib.get("contributor_employer") or contrib.get(
+                "contributor_name", "UNKNOWN"
+            )
+            if group in db.individual_employers:
+                group = contrib.get("contributor_name", "UNKNOWN")
+            elif group in db.company_aliases:
+                group = db.company_aliases[group]
+
+            # Add group if it doesn't exist
+            if group not in donorMap["groups"]:
+                donorMap["groups"][group] = {
+                    "contributions": [],
+                    "rollup": {},
+                    "total": 0,
+                }
+                if "link" in contrib:
+                    donorMap["groups"][group]["link"] = contrib["link"]
+
+            # Add to contributions list
+            donorMap["groups"][group]["contributions"].append(contrib)
+
+            # Update group total
+            amount = contrib.get("contribution_receipt_amount") or contrib.get(
+                "total_receipt_amount", 0
+            )
+            donorMap["groups"][group]["total"] = round(
+                donorMap["groups"][group]["total"] + amount, 2
+            )
+
+            # Add to all_contribs for by_date list
+            all_contribs.append(contrib)
+
+            # Update overall totals
+            donorMap["contributions_count"] += 1
+            if (
+                contrib.get("line_number") == "12"
+                or contrib.get("line_number", "").lower() == "11c"
+            ):
+                donorMap["total_transferred"] = round(
+                    donorMap["total_transferred"] + amount, 2
+                )
+            else:
+                donorMap["total_contributed"] = round(
+                    donorMap["total_contributed"] + amount, 2
+                )
+
+        # Re-sort contributions within each group after adding manually reviewed ones
+        for group in donorMap["groups"].values():
+            group["contributions"] = sorted(
+                group["contributions"],
+                # key=lambda x: (
+                #     x.get("contribution_receipt_amount")
+                #     if "contribution_receipt_amount" in x
+                #     else x.get("total_receipt_amount", 0),
+                #     x.get("contribution_receipt_date")
+                #     if "contribution_receipt_date" in x
+                #     else "0",
+                # ),
+                key=lambda x: x.get("contribution_receipt_date", "0"),
                 reverse=True,
-            )[:10]
+            )
+
+        # Re-sort by_date after adding manually reviewed contributions
+        donorMap["by_date"] = sorted(
+            all_contribs,
+            key=lambda x: x.get("contribution_receipt_date", "0"),
+            reverse=True,
+        )
 
         # Turn the map of groups into a list, sorted descending by total contributions
         donor_list = [

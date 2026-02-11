@@ -1,15 +1,21 @@
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials
+from google.cloud import firestore
 import re
 
 
 class Database:
     def __init__(self):
         cred = credentials.Certificate("service.json")
-        firebase_admin.initialize_app(cred)
-        self.client = firestore.client()
+        app = firebase_admin.initialize_app(cred)
+        gcreds = app.credential.get_credential()
+        project_id = app.project_id
+        self.client = firestore.Client(
+            credentials=gcreds, project=project_id, database="follow-the-crypto-2026"
+        )
         self.committees = None
         self.company_aliases = None
+        self.candidate_aliases = None
         self.individual_employers = None
         self.occupation_allowlist = None
         self.duplicate_contributions = None
@@ -20,11 +26,15 @@ class Database:
         self.individuals = None
         self.committee_affiliations = None
         self.opposition_spending = None
+        self.non_candidate_committees = None
 
     def get_constants(self):
         constants = self.client.collection("constants")
         self.committees = constants.document("committees").get().to_dict()
         self.company_aliases = constants.document("companyAliases").get().to_dict()
+        self.candidate_aliases = (
+            constants.document("candidateAliases").get().to_dict() or {}
+        )
         individual_employers_dict = (
             constants.document("individualEmployers").get().to_dict()
         )
@@ -53,3 +63,7 @@ class Database:
         self.opposition_spending = (
             constants.document("oppositionSpending").get().to_dict()
         )
+        non_candidate_committees_dict = (
+            constants.document("nonCandidateCommittees").get().to_dict()
+        )
+        self.non_candidate_committees = set(non_candidate_committees_dict["ids"])

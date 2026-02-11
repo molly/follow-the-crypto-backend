@@ -55,7 +55,7 @@ def should_omit(contrib, other_contribs, ids_to_omit):
     return False
 
 
-def update_committee_contributions(db):
+def update_committee_contributions(db, session):
     """
     This stores contributions (with a trimmed set of fields) in the "rawContributions" collection in Firestore. Those
     contributions will later be processed in process_committee_contributions.py into a format that saves computation
@@ -81,11 +81,12 @@ def update_committee_contributions(db):
         # First fetch processed contributions
         while True:
             data = FEC_fetch(
+                session,
                 "committee contributions",
                 "https://api.open.fec.gov/v1/schedules/schedule_a",
                 params={
                     "committee_id": committee_id,
-                    "two_year_transaction_period": 2024,
+                    "two_year_transaction_period": 2026,
                     "per_page": 100,
                     "sort": "-contribution_receipt_date",
                     "last_index": last_index,
@@ -121,11 +122,12 @@ def update_committee_contributions(db):
         contribs_count = 0
         while True:
             data = FEC_fetch(
+                session,
                 "unprocessed committee contributions",
                 "https://api.open.fec.gov/v1/schedules/schedule_a/efile",
                 params={
                     "committee_id": committee_id,
-                    "min_date": "2023-01-01",
+                    "min_date": "2025-01-01",
                     "per_page": 100,
                     "sort": "-contribution_receipt_date",
                     "page": page,
