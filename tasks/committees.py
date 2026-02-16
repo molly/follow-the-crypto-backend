@@ -17,6 +17,7 @@ def hydrate_committees(context):
         "expenditures": 0,
         "disbursements": 0,
         "cash_on_hand": 0,
+        "claimed_committed": 0,
     }
     committees_processed = 0
 
@@ -110,6 +111,9 @@ def hydrate_committees(context):
                 )
             committee_data["last_cash_on_hand_end_period"] = cash_on_hand
             combined_committee_totals["cash_on_hand"] += cash_on_hand
+            combined_committee_totals["claimed_committed"] += committee.get(
+                "claimedCommitted", 0
+            )
 
             db.client.collection("committees").document(committee["id"]).set(
                 committee_data
@@ -127,6 +131,9 @@ def hydrate_committees(context):
     )
     combined_committee_totals["cash_on_hand"] = round(
         combined_committee_totals["cash_on_hand"], 2
+    )
+    combined_committee_totals["claimed_committed"] = round(
+        combined_committee_totals["claimed_committed"], 2
     )
     db.client.collection("totals").document("committees").set(combined_committee_totals)
 
