@@ -2,6 +2,7 @@ from pipeline_core.task import task
 from committee_expenditures import update_committee_expenditures
 from process_committee_expenditures import process_expenditures as process_exp
 from candidate_expenditures import update_candidates_expenditures
+from process_company_state_spending import compute_company_state_spending
 
 
 @task(
@@ -25,6 +26,18 @@ def process_expenditures(context):
     """Process committee expenditures and opposition spending."""
     new_opposition_spending = process_exp(context.db)
     return {"new_opposition_spending": new_opposition_spending}
+
+
+@task(
+    name="compute_company_state_spending",
+    depends_on=["process_expenditures", "process_company_contributions"],
+    inputs=["expenditures", "companies"],
+    outputs=["expenditures"],
+)
+def compute_company_state_spending_task(context):
+    """Compute company spending by state from candidate associations."""
+    compute_company_state_spending(context.db)
+    return {"status": "success"}
 
 
 @task(
