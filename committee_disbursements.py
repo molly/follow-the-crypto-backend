@@ -113,11 +113,12 @@ def update_committee_disbursements(db, session):
                 .get()
                 .to_dict()
             )
-            total_receipts += (
-                contributions.get("total_contributed", 0)
-                + contributions.get("total_transferred", 0)
-                - disbursements_total
-            )
+            if contributions:
+                total_receipts += (
+                    contributions.get("total_contributed", 0)
+                    + contributions.get("total_transferred", 0)
+                    - disbursements_total
+                )
     db.client.collection("totals").document("committees").set(
         {"net_receipts": total_receipts}, merge=True
     )

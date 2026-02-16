@@ -39,8 +39,17 @@ def get_ids_to_omit(contribs):
 
 def should_omit(contrib, other_contribs, ids_to_omit):
     """Omit any duplicate contributions, refunds, etc."""
-    if contrib["line_number"] in ["15", "16", "17"]:
+    if contrib["line_number"] in ["15", "16"]:
         return True
+    if contrib["line_number"] == "17":
+        if "receipt_type_full" not in contrib:
+            return True
+        else:
+            receipt_type_full = contrib.get("receipt_type_full", "") or ""
+            if re.match(
+                r"(INTEREST/DIVIDENDS|TRANSFER)", receipt_type_full, re.IGNORECASE
+            ):
+                return True
     if contrib["transaction_id"] in ids_to_omit:
         # Manually excluded transaction, or a parent of a more granularly reported transaction
         return True

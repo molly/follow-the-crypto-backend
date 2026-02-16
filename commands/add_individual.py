@@ -129,17 +129,18 @@ def add_individual(individual_id: str, individual_data: dict, fetch_immediately:
         original_individuals = db.individuals
         db.individuals = temp_individuals
         
+        session = requests.Session()
         try:
             # Fetch their contributions
-            new_contributions = update_spending_by_individuals(db)
+            new_contributions = update_spending_by_individuals(db, session)
             result["data_fetched"] = True
             result["new_contributions_count"] = len(new_contributions)
-            
+
             # Restore full individuals list for processing
             db.individuals = original_individuals
-            
+
             # Process the contributions
-            new_recipients = process_individual_contributions(db)
+            new_recipients = process_individual_contributions(db, session)
             result["contributions_processed"] = True
             result["new_recipients"] = list(new_recipients)
             

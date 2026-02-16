@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import logging
+import requests
 import time
 from Database import Database
 from individuals import update_spending_by_individuals
@@ -51,4 +52,238 @@ def add_individuals_batch(individuals_data, process_immediately=False):
             individual_data["id"] = individual_id
             
         current_individuals[individual_id] = individual_data
-        added_individuals.append((individual_id, individual_data))\n    \n    if not added_individuals:\n        return {\"status\": \"no_new_individuals\", \"added_count\": 0}\n    \n    # Update constants in Firestore\n    db.client.collection(\"constants\").document(\"individuals\").set(current_individuals)\n    db.individuals = current_individuals\n    \n    logging.info(f\"Added {len(added_individuals)} individuals to constants\")\n    \n    result = {\n        \"added_individuals\": [ind_id for ind_id, _ in added_individuals],\n        \"added_count\": len(added_individuals),\n        \"status\": \"added\",\n        \"processed\": False\n    }\n    \n    if process_immediately:\n        result.update(process_pending_individuals(db, [ind_id for ind_id, _ in added_individuals]))\n    \n    return result\n\n\ndef process_pending_individuals(db=None, specific_individuals=None):\n    \"\"\"\n    Process individuals that have been added but not yet processed.\n    Optimized for daily batch operations.\n    \"\"\"\n    if db is None:\n        db = Database()\n        db.get_constants()\n    \n    # Determine which individuals to process\n    if specific_individuals:\n        individuals_to_process = specific_individuals\n    else:\n        # Find individuals without processed data\n        individuals_to_process = []\n        for ind_id in db.individuals.keys():\n            existing_data = db.client.collection(\"individuals\").document(ind_id).get()\n            if not existing_data.exists or not existing_data.to_dict().get(\"contributions\"):\n                individuals_to_process.append(ind_id)\n    \n    if not individuals_to_process:\n        return {\n            \"status\": \"no_pending_individuals\",\n            \"processed_count\": 0,\n            \"companies_updated\": 0\n        }\n    \n    logging.info(f\"Processing {len(individuals_to_process)} individuals: {individuals_to_process}\")\n    start_time = time.time()\n    \n    # Step 1: Fetch contribution data for these individuals\n    temp_individuals = {ind_id: db.individuals[ind_id] for ind_id in individuals_to_process}\n    original_individuals = db.individuals\n    db.individuals = temp_individuals\n    \n    try:\n        new_contributions = update_spending_by_individuals(db)\n        logging.info(f\"Fetched {len(new_contributions)} total contributions\")\n    finally:\n        db.individuals = original_individuals\n    \n    # Step 2: Process individual contributions\n    new_recipients = process_individual_contributions(db)\n    logging.info(f\"Found {len(new_recipients)} new recipients\")\n    \n    # Step 3: Update company data efficiently\n    affected_companies = get_affected_companies(db, individuals_to_process)\n    companies_updated = 0\n    \n    if affected_companies:\n        logging.info(f\"Updating {len(affected_companies)} affected companies: {list(affected_companies)}\")\n        \n        # Update company data selectively\n        companies_updated = update_companies_selective(db, affected_companies)\n    \n    elapsed_time = time.time() - start_time\n    \n    return {\n        \"status\": \"processed\",\n        \"processed\": True,\n        \"processed_individuals\": individuals_to_process,\n        \"processed_count\": len(individuals_to_process),\n        \"new_contributions\": len(new_contributions),\n        \"new_recipients\": len(new_recipients),\n        \"affected_companies\": list(affected_companies),\n        \"companies_updated\": companies_updated,\n        \"elapsed_time_seconds\": round(elapsed_time, 2),\n        \"optimization\": \"batch_selective_processing\"\n    }\n\n\ndef get_affected_companies(db, individual_ids):\n    \"\"\"\n    Get the set of companies that need updating based on the individuals processed.\n    \"\"\"\n    affected_companies = set()\n    \n    for ind_id in individual_ids:\n        if ind_id in db.individuals:\n            individual = db.individuals[ind_id]\n            if \"company\" in individual:\n                affected_companies.update(individual[\"company\"])\n    \n    return affected_companies\n\n\ndef update_companies_selective(db, company_names):\n    \"\"\"\n    Update only the specific companies that are affected by the new individuals.\n    \"\"\"\n    # Find company IDs that match the names\n    company_ids_to_update = []\n    for company_id, company in db.companies.items():\n        if company[\"name\"] in company_names:\n            company_ids_to_update.append(company_id)\n    \n    if not company_ids_to_update:\n        logging.warning(f\"No company IDs found for names: {company_names}\")\n        return 0\n    \n    # Update company spending for these companies\n    original_companies = db.companies.copy()\n    temp_companies = {cid: db.companies[cid] for cid in company_ids_to_update}\n    db.companies = temp_companies\n    \n    try:\n        update_spending_by_company(db)\n    finally:\n        db.companies = original_companies\n    \n    # Process company contributions for these specific companies\n    from commands.add_individual import update_company_contributions_selective\n    update_company_contributions_selective(db, company_ids_to_update)\n    \n    return len(company_ids_to_update)\n\n\ndef parse_individual_spec(spec):\n    \"\"\"\n    Parse individual specification: \"id:Company Name\" or \"id:Company1,Company2\" or just \"id\"\n    \"\"\"\n    parts = spec.split(\":\", 1)\n    individual_id = parts[0].strip()\n    \n    individual_data = {\n        \"id\": individual_id,\n        \"name\": individual_id.replace(\"-\", \" \").title()\n    }\n    \n    if len(parts) > 1 and parts[1].strip():\n        companies = [c.strip() for c in parts[1].split(\",\") if c.strip()]\n        if companies:\n            individual_data[\"company\"] = companies\n    \n    return individual_id, individual_data\n\n\ndef main():\n    parser = argparse.ArgumentParser(description=\"Batch processing for daily operations\")\n    parser.add_argument(\"--add\", action=\"append\", help=\"Add individual (format: 'id:Company Name' or 'id:Company1,Company2')\")\n    parser.add_argument(\"--process-pending\", action=\"store_true\", help=\"Process individuals that haven't been processed yet\")\n    parser.add_argument(\"--process-immediately\", action=\"store_true\", help=\"Process individuals immediately after adding\")\n    parser.add_argument(\"--verbose\", \"-v\", action=\"store_true\", help=\"Verbose logging\")\n    \n    args = parser.parse_args()\n    \n    # Set up logging\n    level = logging.DEBUG if args.verbose else logging.INFO\n    logging.basicConfig(level=level, format=\"%(asctime)s - %(levelname)s - %(message)s\")\n    \n    try:\n        total_result = {\"operations\": []}\n        \n        # Add individuals if specified\n        if args.add:\n            individuals_data = []\n            for spec in args.add:\n                individual_id, individual_data = parse_individual_spec(spec)\n                individuals_data.append((individual_id, individual_data))\n            \n            print(f\"📝 Adding {len(individuals_data)} individuals...\")\n            add_result = add_individuals_batch(individuals_data, args.process_immediately)\n            total_result[\"operations\"].append({\"type\": \"add\", \"result\": add_result})\n            \n            if add_result[\"added_count\"] > 0:\n                print(f\"✅ Added {add_result['added_count']} individuals: {', '.join(add_result['added_individuals'])}\")\n                \n                if add_result.get(\"processed\"):\n                    print(f\"⚡ Processed immediately (optimization: {add_result.get('optimization', 'unknown')})\")\n                    print(f\"📊 Total contributions: {add_result.get('new_contributions', 0)}\")\n                    print(f\"🏢 Companies updated: {add_result.get('companies_updated', 0)}\")\n                    print(f\"⏱️  Elapsed time: {add_result.get('elapsed_time_seconds', 0)}s\")\n            else:\n                print(\"ℹ️  No new individuals were added (may already exist)\")\n        \n        # Process pending individuals if specified\n        if args.process_pending and not args.process_immediately:\n            print(\"⚙️  Processing pending individuals...\")\n            process_result = process_pending_individuals()\n            total_result[\"operations\"].append({\"type\": \"process\", \"result\": process_result})\n            \n            if process_result[\"processed_count\"] > 0:\n                print(f\"✅ Processed {process_result['processed_count']} individuals\")\n                print(f\"📊 New contributions: {process_result['new_contributions']}\")\n                print(f\"🏢 Companies updated: {process_result['companies_updated']}\")\n                print(f\"⏱️  Elapsed time: {process_result['elapsed_time_seconds']}s\")\n                print(f\"🚀 Optimization: {process_result['optimization']}\")\n            else:\n                print(\"ℹ️  No pending individuals found to process\")\n        \n        # Show usage tips for daily operations\n        if not args.add and not args.process_pending:\n            print(\"💡 Daily Operations Tips:\")\n            print(\"   Add without processing: --add 'person-id:Company Name'\")\n            print(\"   Process all pending: --process-pending\")\n            print(\"   Add and process immediately: --add 'person-id:Company' --process-immediately\")\n        \n        return 0\n        \n    except Exception as e:\n        print(f\"❌ Error in batch processing: {e}\")\n        if args.verbose:\n            import traceback\n            traceback.print_exc()\n        return 1\n\n\nif __name__ == \"__main__\":\n    exit(main())
+        added_individuals.append((individual_id, individual_data))
+    
+    if not added_individuals:
+        return {"status": "no_new_individuals", "added_count": 0}
+    
+    # Update constants in Firestore
+    db.client.collection("constants").document("individuals").set(current_individuals)
+    db.individuals = current_individuals
+    
+    logging.info(f"Added {len(added_individuals)} individuals to constants")
+    
+    result = {
+        "added_individuals": [ind_id for ind_id, _ in added_individuals],
+        "added_count": len(added_individuals),
+        "status": "added",
+        "processed": False
+    }
+    
+    if process_immediately:
+        result.update(process_pending_individuals(db, [ind_id for ind_id, _ in added_individuals]))
+    
+    return result
+
+
+def process_pending_individuals(db=None, specific_individuals=None):
+    """
+    Process individuals that have been added but not yet processed.
+    Optimized for daily batch operations.
+    """
+    if db is None:
+        db = Database()
+        db.get_constants()
+    
+    # Determine which individuals to process
+    if specific_individuals:
+        individuals_to_process = specific_individuals
+    else:
+        # Find individuals without processed data
+        individuals_to_process = []
+        for ind_id in db.individuals.keys():
+            existing_data = db.client.collection("individuals").document(ind_id).get()
+            if not existing_data.exists or not existing_data.to_dict().get("contributions"):
+                individuals_to_process.append(ind_id)
+    
+    if not individuals_to_process:
+        return {
+            "status": "no_pending_individuals",
+            "processed_count": 0,
+            "companies_updated": 0
+        }
+    
+    logging.info(f"Processing {len(individuals_to_process)} individuals: {individuals_to_process}")
+    start_time = time.time()
+    session = requests.Session()
+
+    # Step 1: Fetch contribution data for these individuals
+    temp_individuals = {ind_id: db.individuals[ind_id] for ind_id in individuals_to_process}
+    original_individuals = db.individuals
+    db.individuals = temp_individuals
+    
+    try:
+        new_contributions = update_spending_by_individuals(db, session)
+        logging.info(f"Fetched {len(new_contributions)} total contributions")
+    finally:
+        db.individuals = original_individuals
+    
+    # Step 2: Process individual contributions
+    new_recipients = process_individual_contributions(db, session)
+    logging.info(f"Found {len(new_recipients)} new recipients")
+    
+    # Step 3: Update company data efficiently
+    affected_companies = get_affected_companies(db, individuals_to_process)
+    companies_updated = 0
+    
+    if affected_companies:
+        logging.info(f"Updating {len(affected_companies)} affected companies: {list(affected_companies)}")
+        
+        # Update company data selectively
+        companies_updated = update_companies_selective(db, affected_companies)
+    
+    elapsed_time = time.time() - start_time
+    
+    return {
+        "status": "processed",
+        "processed": True,
+        "processed_individuals": individuals_to_process,
+        "processed_count": len(individuals_to_process),
+        "new_contributions": len(new_contributions),
+        "new_recipients": len(new_recipients),
+        "affected_companies": list(affected_companies),
+        "companies_updated": companies_updated,
+        "elapsed_time_seconds": round(elapsed_time, 2),
+        "optimization": "batch_selective_processing"
+    }
+
+
+def get_affected_companies(db, individual_ids):
+    """
+    Get the set of companies that need updating based on the individuals processed.
+    """
+    affected_companies = set()
+    
+    for ind_id in individual_ids:
+        if ind_id in db.individuals:
+            individual = db.individuals[ind_id]
+            if "company" in individual:
+                affected_companies.update(individual["company"])
+    
+    return affected_companies
+
+
+def update_companies_selective(db, company_names):
+    """
+    Update only the specific companies that are affected by the new individuals.
+    """
+    # Find company IDs that match the names
+    company_ids_to_update = []
+    for company_id, company in db.companies.items():
+        if company["name"] in company_names:
+            company_ids_to_update.append(company_id)
+    
+    if not company_ids_to_update:
+        logging.warning(f"No company IDs found for names: {company_names}")
+        return 0
+    
+    # Update company spending for these companies
+    original_companies = db.companies.copy()
+    temp_companies = {cid: db.companies[cid] for cid in company_ids_to_update}
+    db.companies = temp_companies
+    
+    session = requests.Session()
+    try:
+        update_spending_by_company(db, session)
+    finally:
+        db.companies = original_companies
+
+    # Process company contributions for these specific companies
+    from commands.add_individual import update_company_contributions_selective
+    update_company_contributions_selective(db, company_ids_to_update)
+    
+    return len(company_ids_to_update)
+
+
+def parse_individual_spec(spec):
+    """
+    Parse individual specification: "id:Company Name" or "id:Company1,Company2" or just "id"
+    """
+    parts = spec.split(":", 1)
+    individual_id = parts[0].strip()
+    
+    individual_data = {
+        "id": individual_id,
+        "name": individual_id.replace("-", " ").title()
+    }
+    
+    if len(parts) > 1 and parts[1].strip():
+        companies = [c.strip() for c in parts[1].split(",") if c.strip()]
+        if companies:
+            individual_data["company"] = companies
+    
+    return individual_id, individual_data
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Batch processing for daily operations")
+    parser.add_argument("--add", action="append", help="Add individual (format: 'id:Company Name' or 'id:Company1,Company2')")
+    parser.add_argument("--process-pending", action="store_true", help="Process individuals that haven't been processed yet")
+    parser.add_argument("--process-immediately", action="store_true", help="Process individuals immediately after adding")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
+    
+    args = parser.parse_args()
+    
+    # Set up logging
+    level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(level=level, format="%(asctime)s - %(levelname)s - %(message)s")
+    
+    try:
+        total_result = {"operations": []}
+        
+        # Add individuals if specified
+        if args.add:
+            individuals_data = []
+            for spec in args.add:
+                individual_id, individual_data = parse_individual_spec(spec)
+                individuals_data.append((individual_id, individual_data))
+            
+            print(f"📝 Adding {len(individuals_data)} individuals...")
+            add_result = add_individuals_batch(individuals_data, args.process_immediately)
+            total_result["operations"].append({"type": "add", "result": add_result})
+            
+            if add_result["added_count"] > 0:
+                print(f"✅ Added {add_result['added_count']} individuals: {', '.join(add_result['added_individuals'])}")
+                
+                if add_result.get("processed"):
+                    print(f"⚡ Processed immediately (optimization: {add_result.get('optimization', 'unknown')})")
+                    print(f"📊 Total contributions: {add_result.get('new_contributions', 0)}")
+                    print(f"🏢 Companies updated: {add_result.get('companies_updated', 0)}")
+                    print(f"⏱️  Elapsed time: {add_result.get('elapsed_time_seconds', 0)}s")
+            else:
+                print("ℹ️  No new individuals were added (may already exist)")
+        
+        # Process pending individuals if specified
+        if args.process_pending and not args.process_immediately:
+            print("⚙️  Processing pending individuals...")
+            process_result = process_pending_individuals()
+            total_result["operations"].append({"type": "process", "result": process_result})
+            
+            if process_result["processed_count"] > 0:
+                print(f"✅ Processed {process_result['processed_count']} individuals")
+                print(f"📊 New contributions: {process_result['new_contributions']}")
+                print(f"🏢 Companies updated: {process_result['companies_updated']}")
+                print(f"⏱️  Elapsed time: {process_result['elapsed_time_seconds']}s")
+                print(f"🚀 Optimization: {process_result['optimization']}")
+            else:
+                print("ℹ️  No pending individuals found to process")
+        
+        # Show usage tips for daily operations
+        if not args.add and not args.process_pending:
+            print("💡 Daily Operations Tips:")
+            print("   Add without processing: --add 'person-id:Company Name'")
+            print("   Process all pending: --process-pending")
+            print("   Add and process immediately: --add 'person-id:Company' --process-immediately")
+        
+        return 0
+        
+    except Exception as e:
+        print(f"❌ Error in batch processing: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
+
+
+if __name__ == "__main__":
+    exit(main())

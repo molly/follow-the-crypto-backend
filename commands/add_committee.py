@@ -85,7 +85,6 @@ def hydrate_committee(db, committee_id, committee_data, session=None):
                         "contributions",
                         "contribution_refunds",
                         "disbursements",
-                        "last_cash_on_hand_end_period",
                         "net_contributions",
                         "receipts",
                         "independent_expenditures",
@@ -93,6 +92,28 @@ def hydrate_committee(db, committee_id, committee_data, session=None):
                 ),
             )
             committee_processed["totals_fetched"] = True
+
+        # Fetch cash on hand from the 2024 cycle to get EOY 2024 balance,
+        # avoiding double-counting 2025 contributions.
+        # Newly formed committees return None here, which is fine — they had $0.
+        full_committee_data["last_cash_on_hand_end_period"] = 0
+        cash_on_hand_data = FEC_fetch(
+            session,
+            "committee EOY 2024 cash on hand",
+            "https://api.open.fec.gov/v1/committee/{}/totals".format(committee_id),
+            params={"cycle": 2024},
+        )
+        if (
+            cash_on_hand_data
+            and "results" in cash_on_hand_data
+            and len(cash_on_hand_data["results"])
+            and cash_on_hand_data["results"][0]
+        ):
+            full_committee_data["last_cash_on_hand_end_period"] = (
+                cash_on_hand_data["results"][0].get(
+                    "last_cash_on_hand_end_period", 0
+                )
+            )
 
         # Save to Firestore committees collection
         db.client.collection("committees").document(committee_id).set(full_committee_data)

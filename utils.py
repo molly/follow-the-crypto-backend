@@ -46,6 +46,8 @@ def FEC_fetch(session, description, url, params={}):
         },
         timeout=30,
     )
+    if r.status_code == 404:
+        return None
     r.raise_for_status()
     if r.status_code == 200:
         return r.json()

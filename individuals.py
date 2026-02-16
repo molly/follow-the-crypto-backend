@@ -1,4 +1,4 @@
-from company_spending import process_contribution
+from company_spending import parse_search_id, process_contribution
 from utils import FEC_fetch
 
 
@@ -18,18 +18,39 @@ def get_individual_search_params(individual, companies, efiled=False):
         search_params["contributor_zip"] = individual["zip"]
     elif efiled and "city" in individual:
         search_params["contributor_city"] = individual["city"]
-    elif "employerSearch" in individual:
+    elif companies:
+        employer_params = []
+        for company in companies:
+            search_ids = [company["id"].replace("-", " ")]
+            if "search_id" in company:
+                if isinstance(company["search_id"], list):
+                    search_ids.extend(company["search_id"])
+                else:
+                    search_ids.append(company["search_id"])
+            employer_params.extend(
+                parse_search_id(term)[0] for term in search_ids
+            )
+        search_params["contributor_employer"] = employer_params
+    elif "company" in individual:
+        search_params["contributor_employer"] = individual["company"]
+
+    if "employerSearch" in individual:
         if (
             len(individual["employerSearch"]) == 0
             or individual["employerSearch"][0] == ""
         ):
             return search_params
-        search_params["contributor_employer"] = individual["employerSearch"]
-    elif companies:
-        search_params["contributor_employer"] = [
-            company.get("search_id", company["id"].replace("-", " "))
-            for company in companies
-        ]
+        if "contributor_employer" not in search_params:
+            search_params["contributor_employer"] = []
+        if isinstance(individual["employerSearch"], list):
+            for query in individual["employerSearch"]:
+                parsed = parse_search_id(query)
+                if parsed[0] not in search_params["contributor_employer"]:
+                    search_params["contributor_employer"].append(parsed[0])
+        else:
+            parsed = parse_search_id(individual["employerSearch"])
+            if parsed[0] not in search_params["contributor_employer"]:
+                search_params["contributor_employer"].append(parsed[0])
     return search_params
 
 
@@ -78,6 +99,7 @@ def update_spending_by_individuals(db, session):
                     "sort": "-contribution_receipt_date",
                     "last_index": last_index,
                     "last_contribution_receipt_date": last_contribution_receipt_date,
+                    "min_amount": 1000
                 },
             )
             if not contribution_data:
@@ -127,6 +149,7 @@ def update_spending_by_individuals(db, session):
                     "per_page": 100,
                     "sort": "-contribution_receipt_date",
                     "page": page,
+                    "min_amount": 1000
                 },
             )
 

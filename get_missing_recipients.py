@@ -3,6 +3,12 @@ from states import SINGLE_MEMBER_STATES
 from utils import chunk, FEC_fetch, pick
 
 
+def race_has_candidate(race, candidate_id):
+    return any(
+        candidate_id == c.get("candidate_id", None) for c in race["candidates"].values()
+    )
+
+
 def get_missing_recipient_data(recipients, db, session):
     committee_data = {}
 
@@ -95,22 +101,37 @@ def get_missing_recipient_data(recipients, db, session):
             )
             race_data = race_doc.to_dict() if race_doc.exists else None
             if race_data:
-                if candidate["office"] == "S" and "S" in race_data:
-                    candidate_data[candidate_id][
-                        "race_link"
-                    ] = f"/elections/{candidate['state']}-S"
+                if candidate["office"] == "S":
+                    if "S" in race_data and race_has_candidate(
+                        race_data["S"], candidate_id
+                    ):
+                        candidate_data[candidate_id][
+                            "race_link"
+                        ] = f"/elections/{candidate['state']}-S"
+                    elif "S-special" in race_data and race_has_candidate(
+                        race_data["S-special"], candidate_id
+                    ):
+                        candidate_data[candidate_id][
+                            "race_link"
+                        ] = f"/elections/{candidate['state']}-S-special"
                 elif candidate["office"] == "H":
                     district = (
                         candidate["district"]
                         if candidate["state"] not in SINGLE_MEMBER_STATES
                         else "01"
                     )
-                    if f"H-{district}" in race_data:
+                    if f"H-{district}" in race_data and race_has_candidate(
+                        race_data[f"H-{district}"], candidate_id
+                    ):
                         candidate_data[candidate_id][
                             "race_link"
                         ] = f"/elections/{candidate['state']}-H-{district}"
-                elif candidate["office"] == "P":
-                    candidate_data[candidate_id]["race_link"] = "/elections/president"
+                    elif f"H-{district}-special" in race_data and race_has_candidate(
+                        race_data[f"H-{district}-special"], candidate_id
+                    ):
+                        candidate_data[candidate_id][
+                            "race_link"
+                        ] = f"/elections/{candidate['state']}-H-{district}-special"
 
     for recipient_id in recipients.keys():
         related_candidates = recipients[recipient_id].get("candidate_ids", []) or []
