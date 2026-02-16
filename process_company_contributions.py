@@ -100,6 +100,8 @@ def process_company_contributions(db, session):
                 individuals_data[ind_doc.id] = ind_doc.to_dict()
 
     # Summarize spending by party
+    all_companies_total = 0
+    all_companies_by_party = {}
     for company_id, company in companies_list:
         contributions = company.get("contributions", {})
         related_individuals = company.get("relatedIndividuals", [])
@@ -281,6 +283,13 @@ def process_company_contributions(db, session):
                 party_summary[party] = 0
             party_summary[party] += group_data["total"]
 
+        company_total = sum(party_summary.values())
+        all_companies_total += company_total
+        for party, amount in party_summary.items():
+            if party not in all_companies_by_party:
+                all_companies_by_party[party] = 0
+            all_companies_by_party[party] += amount
+
         sorted_contributions = sorted(
             contributions.values(), key=lambda x: x["total"], reverse=True
         )
@@ -288,5 +297,12 @@ def process_company_contributions(db, session):
             {"party_summary": party_summary, "contributions": sorted_contributions},
             merge=True,
         )
+
+    db.client.collection("totals").document("companies").set(
+        {
+            "total": round(all_companies_total, 2),
+            "by_party": {k: round(v, 2) for k, v in all_companies_by_party.items()},
+        }
+    )
 
     return new_recipients

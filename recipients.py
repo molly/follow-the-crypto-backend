@@ -13,41 +13,50 @@ def group_contributions(new_contributions, existing_contributions, committees):
             INDIVIDUAL_KEYS if contrib.get("isIndividual") else ["contributor_name"]
         )
         group_key = (
-            contrib["individual"]
+            contrib.get("individual", contrib["contributor_name"])
             if contrib.get("isIndividual")
             else contrib["contributor_name"]
+        )
+        is_rollup = "total_receipt_amount" in contrib
+        amount = (
+            contrib["total_receipt_amount"]
+            if is_rollup
+            else contrib["contribution_receipt_amount"]
+        )
+        oldest_date = (
+            contrib["oldest"]
+            if is_rollup
+            else contrib["contribution_receipt_date"]
+        )
+        newest_date = (
+            contrib["newest"]
+            if is_rollup
+            else contrib["contribution_receipt_date"]
         )
         if group_key not in existing_contributions:
             existing_contributions[group_key] = {
                 **pick(contrib, field_keys),
                 "total": 0,
                 "committees": [],
-                "oldest": contrib["contribution_receipt_date"],
-                "newest": contrib["contribution_receipt_date"],
+                "oldest": oldest_date,
+                "newest": newest_date,
             }
-        existing_contributions[group_key]["total"] += contrib[
-            "contribution_receipt_amount"
-        ]
-        if (
-            contrib["contribution_receipt_date"]
-            < existing_contributions[group_key]["oldest"]
-        ):
-            existing_contributions[group_key]["oldest"] = contrib[
-                "contribution_receipt_date"
-            ]
-        if (
-            contrib["contribution_receipt_date"]
-            > existing_contributions[group_key]["newest"]
-        ):
-            existing_contributions[group_key]["newest"] = contrib[
-                "contribution_receipt_date"
-            ]
+        existing_contributions[group_key]["total"] += amount
+        if oldest_date < existing_contributions[group_key]["oldest"]:
+            existing_contributions[group_key]["oldest"] = oldest_date
+        if newest_date > existing_contributions[group_key]["newest"]:
+            existing_contributions[group_key]["newest"] = newest_date
         if contrib.get("committee_name"):
             committee_name = contrib.get("committee_name")
             if committee_name not in existing_contributions[group_key]["committees"]:
                 existing_contributions[group_key]["committees"].append(committee_name)
         else:
-            committee_name = committees.get(contrib["committee_id"], {}).get("name")
+            committee_id = contrib.get("committee_id")
+            committee_name = (
+                committees.get(committee_id, {}).get("name")
+                if committee_id
+                else None
+            )
             if (
                 committee_name
                 and committee_name
