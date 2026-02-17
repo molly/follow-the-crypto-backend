@@ -3,6 +3,7 @@ from utils import pick, get_beneficiaries
 INDIVIDUAL_KEYS = [
     "individual",
     "contributor_name",
+    "contributor_occupation",
     "isIndividual",
 ]
 
