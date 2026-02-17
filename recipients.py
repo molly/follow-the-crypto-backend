@@ -74,7 +74,9 @@ def summarize_recipients(db):
     if not all_recipient_committees:
         all_recipient_committees = {}
     for doc in db.client.collection("companies").stream():
+        company_id = doc.id
         company = doc.to_dict()
+        company_name = db.companies.get(company_id, {}).get("name", company_id)
         contributions_groups = company["contributions"]
         for group in contributions_groups:
             committee_id = group["committee_id"]
@@ -82,11 +84,18 @@ def summarize_recipients(db):
             beneficiaries = get_beneficiaries(
                 group, recipient_committee, db.non_candidate_committees
             )
-            for beneficiary in beneficiaries:
-                # Normalize candidate IDs (e.g., House ID -> Senate ID for candidates
-                # who switched races)
-                if beneficiary in db.candidate_aliases:
-                    beneficiary = db.candidate_aliases[beneficiary]
+            # Normalize candidate aliases and deduplicate to avoid
+            # double-counting when a committee lists multiple IDs for the
+            # same candidate (e.g. House ID + Senate ID after switching races)
+            seen = set()
+            normalized_beneficiaries = []
+            for b in beneficiaries:
+                if b in db.candidate_aliases:
+                    b = db.candidate_aliases[b]
+                if b not in seen:
+                    seen.add(b)
+                    normalized_beneficiaries.append(b)
+            for beneficiary in normalized_beneficiaries:
                 if beneficiary not in recipients:
                     recipients[beneficiary] = {
                         "total": 0,
@@ -115,20 +124,42 @@ def summarize_recipients(db):
                                     "candidate_details"
                                 ] = candidate_details
                 recipients[beneficiary]["total"] += group["total"]
-                recipients[beneficiary]["contributions"] = group_contributions(
+                if company_id not in recipients[beneficiary]["contributions"]:
+                    recipients[beneficiary]["contributions"][company_id] = {
+                        "company_id": company_id,
+                        "company_name": company_name,
+                        "total": 0,
+                        "contributions": {},
+                    }
+                recipients[beneficiary]["contributions"][company_id][
+                    "total"
+                ] += group["total"]
+                recipients[beneficiary]["contributions"][company_id][
+                    "contributions"
+                ] = group_contributions(
                     group["contributions"],
-                    recipients[beneficiary]["contributions"],
+                    recipients[beneficiary]["contributions"][company_id][
+                        "contributions"
+                    ],
                     db.committees,
                 )
 
     for recipient, data in recipients.items():
-        recipients[recipient]["contributions"] = sorted(
-            data["contributions"].values(), key=lambda x: x["total"], reverse=True
-        )
-        for contrib in recipients[recipient]["contributions"]:
-            contrib["committees"] = sorted(
-                contrib["committees"], key=lambda x: x.lower()
+        for company_data in data["contributions"].values():
+            company_data["contributions"] = sorted(
+                company_data["contributions"].values(),
+                key=lambda x: x["total"],
+                reverse=True,
             )
+            for contrib in company_data["contributions"]:
+                contrib["committees"] = sorted(
+                    contrib["committees"], key=lambda x: x.lower()
+                )
+        recipients[recipient]["contributions"] = sorted(
+            data["contributions"].values(),
+            key=lambda x: x["total"],
+            reverse=True,
+        )
 
     order = sorted(
         recipients.keys(), key=lambda x: recipients[x]["total"], reverse=True
