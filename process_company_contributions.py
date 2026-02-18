@@ -102,6 +102,10 @@ def process_company_contributions(db, session):
     # Summarize spending by party
     all_companies_total = 0
     all_companies_by_party = {}
+    # Track individual contribution transaction IDs that have already been attributed
+    # to a company, to prevent double-counting when an individual is associated with
+    # multiple companies (e.g. a founder of two related companies).
+    globally_attributed_individual_transaction_ids = set()
     for company_id, company in companies_list:
         contributions = company.get("contributions", {})
         related_individuals = company.get("relatedIndividuals", [])
@@ -133,13 +137,17 @@ def process_company_contributions(db, session):
                 contribs_with_attribution = []
                 deduped_total = 0
                 for c in group_data["contributions"]:
-                    if c.get("transaction_id") in existing_transaction_ids:
+                    transaction_id = c.get("transaction_id")
+                    if transaction_id in existing_transaction_ids:
+                        continue
+                    if transaction_id in globally_attributed_individual_transaction_ids:
                         continue
                     contribs_with_attribution.append(
                         {**c, "isIndividual": True, "individual": ind["id"]}
                     )
                     deduped_total += c.get("contribution_receipt_amount", 0)
-                    existing_transaction_ids.add(c.get("transaction_id"))
+                    existing_transaction_ids.add(transaction_id)
+                    globally_attributed_individual_transaction_ids.add(transaction_id)
                 if not contribs_with_attribution:
                     continue
                 if recipient not in contributions:

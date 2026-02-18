@@ -8,7 +8,13 @@ INDIVIDUAL_KEYS = [
 ]
 
 
-def group_contributions(new_contributions, existing_contributions, committees):
+def group_contributions(
+    new_contributions,
+    existing_contributions,
+    committees,
+    all_recipient_committees,
+    committee_name_to_type,
+):
     for contrib in new_contributions:
         field_keys = (
             INDIVIDUAL_KEYS if contrib.get("isIndividual") else ["contributor_name"]
@@ -49,8 +55,15 @@ def group_contributions(new_contributions, existing_contributions, committees):
             existing_contributions[group_key]["newest"] = newest_date
         if contrib.get("committee_name"):
             committee_name = contrib.get("committee_name")
-            if committee_name not in existing_contributions[group_key]["committees"]:
-                existing_contributions[group_key]["committees"].append(committee_name)
+            existing_names = [
+                c["name"]
+                for c in existing_contributions[group_key]["committees"]
+            ]
+            if committee_name not in existing_names:
+                committee_type_full = committee_name_to_type.get(committee_name)
+                existing_contributions[group_key]["committees"].append(
+                    {"name": committee_name, "committee_type_full": committee_type_full}
+                )
         else:
             committee_id = contrib.get("committee_id")
             committee_name = (
@@ -58,12 +71,25 @@ def group_contributions(new_contributions, existing_contributions, committees):
                 if committee_id
                 else None
             )
-            if (
-                committee_name
-                and committee_name
-                not in existing_contributions[group_key]["committees"]
-            ):
-                existing_contributions[group_key]["committees"].append(committee_name)
+            if committee_name:
+                existing_names = [
+                    c["name"]
+                    for c in existing_contributions[group_key]["committees"]
+                ]
+                if committee_name not in existing_names:
+                    committee_type_full = (
+                        all_recipient_committees.get(committee_id, {}).get(
+                            "committee_type_full"
+                        )
+                        if committee_id
+                        else None
+                    )
+                    existing_contributions[group_key]["committees"].append(
+                        {
+                            "name": committee_name,
+                            "committee_type_full": committee_type_full,
+                        }
+                    )
     return existing_contributions
 
 
@@ -74,6 +100,11 @@ def summarize_recipients(db):
     )
     if not all_recipient_committees:
         all_recipient_committees = {}
+    committee_name_to_type = {
+        v["committee_name"]: v.get("committee_type_full")
+        for v in all_recipient_committees.values()
+        if v.get("committee_name")
+    }
     for doc in db.client.collection("companies").stream():
         company_id = doc.id
         company = doc.to_dict()
@@ -143,6 +174,8 @@ def summarize_recipients(db):
                         "contributions"
                     ],
                     db.committees,
+                    all_recipient_committees,
+                    committee_name_to_type,
                 )
 
     for recipient, data in recipients.items():
@@ -154,7 +187,7 @@ def summarize_recipients(db):
             )
             for contrib in company_data["contributions"]:
                 contrib["committees"] = sorted(
-                    contrib["committees"], key=lambda x: x.lower()
+                    contrib["committees"], key=lambda x: x["name"].lower()
                 )
         recipients[recipient]["contributions"] = sorted(
             data["contributions"].values(),
