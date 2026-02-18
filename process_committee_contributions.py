@@ -230,9 +230,28 @@ def process_contribution(contrib, db, donorMap):
     else:
         # Add the contribution to a rollup.
         # Note we don't redact here, that happens later
-        if contrib["contributor_name"] not in donorMap["groups"][group]["rollup"]:
+
+        # Normalize the rollup key to handle variations across filings:
+        # - Middle names/initials lumped into first name ("RAVI" vs "RAVI PRAKASH")
+        # - Trailing whitespace in name fields
+        # Use only the first word of first_name + last_name, matching the approach
+        # in process_company_contributions.py
+        if contrib.get("contributor_last_name") and contrib.get("contributor_first_name"):
+            first_name = contrib["contributor_first_name"].strip().upper().split()[0]
+            last_name = contrib["contributor_last_name"].strip().upper()
+            rollup_name = f"{last_name}, {first_name}"
+        else:
+            rollup_name = contrib["contributor_name"].strip().upper()
+            if ", " in rollup_name:
+                parts = rollup_name.split(", ", 1)
+                if len(parts) == 2:
+                    first_parts = parts[1].split()
+                    if first_parts:
+                        rollup_name = f"{parts[0]}, {first_parts[0]}"
+
+        if rollup_name not in donorMap["groups"][group]["rollup"]:
             # Initialize the rollup group
-            donorMap["groups"][group]["rollup"][contrib["contributor_name"]] = {
+            donorMap["groups"][group]["rollup"][rollup_name] = {
                 **contrib,
                 "oldest": contrib["contribution_receipt_date"],
                 "newest": contrib["contribution_receipt_date"],
@@ -242,39 +261,37 @@ def process_contribution(contrib, db, donorMap):
                 ),
             }
         else:
-            donorMap["groups"][group]["rollup"][contrib["contributor_name"]][
+            donorMap["groups"][group]["rollup"][rollup_name][
                 "total"
             ] += 1
-            donorMap["groups"][group]["rollup"][contrib["contributor_name"]][
+            donorMap["groups"][group]["rollup"][rollup_name][
                 "total_receipt_amount"
             ] += round(contrib["contribution_receipt_amount"], 2)
 
             # Set newest/oldest dates
             if (
                 contrib["contribution_receipt_date"]
-                < donorMap["groups"][group]["rollup"][contrib["contributor_name"]][
+                < donorMap["groups"][group]["rollup"][rollup_name][
                     "oldest"
                 ]
             ):
-                donorMap["groups"][group]["rollup"][contrib["contributor_name"]][
+                donorMap["groups"][group]["rollup"][rollup_name][
                     "oldest"
                 ] = contrib["contribution_receipt_date"]
             if (
                 contrib["contribution_receipt_date"]
-                > donorMap["groups"][group]["rollup"][contrib["contributor_name"]][
+                > donorMap["groups"][group]["rollup"][rollup_name][
                     "newest"
                 ]
             ):
-                donorMap["groups"][group]["rollup"][contrib["contributor_name"]][
+                donorMap["groups"][group]["rollup"][rollup_name][
                     "newest"
                 ] = contrib["contribution_receipt_date"]
 
             # Update the aggregate YTD contribution if this is a new high
             if "contributor_aggregate_ytd" in contrib:
                 current_aggregate = contrib["contributor_aggregate_ytd"] or 0
-                rollup_entry = donorMap["groups"][group]["rollup"][
-                    contrib["contributor_name"]
-                ]
+                rollup_entry = donorMap["groups"][group]["rollup"][rollup_name]
                 existing_aggregate = rollup_entry.get("contributor_aggregate_ytd") or 0
 
                 if current_aggregate > existing_aggregate:
@@ -467,15 +484,14 @@ def process_committee_contributions(db):
         for group in donorMap["groups"].values():
             group["contributions"] = sorted(
                 group["contributions"],
-                # key=lambda x: (
-                #     x.get("contribution_receipt_amount")
-                #     if "contribution_receipt_amount" in x
-                #     else x.get("total_receipt_amount", 0),
-                #     x.get("contribution_receipt_date")
-                #     if "contribution_receipt_date" in x
-                #     else "0",
-                # ),
-                key=lambda x: x.get("contribution_receipt_date", "0"),
+                key=lambda x: (
+                    x.get("contribution_receipt_amount")
+                    if "contribution_receipt_amount" in x
+                    else x.get("total_receipt_amount", 0),
+                    x.get("contribution_receipt_date")
+                    if "contribution_receipt_date" in x
+                    else "0",
+                ),
                 reverse=True,
             )
 

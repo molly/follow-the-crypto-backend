@@ -9,6 +9,9 @@ def compute_company_state_spending(db):
     recipients_doc = db.client.collection("allRecipients").document("recipients").get()
     all_recipients = recipients_doc.to_dict() if recipients_doc.exists else {}
 
+    # Load non-candidate committees to skip (same as get_beneficiaries)
+    non_candidate_committees = db.non_candidate_committees or set()
+
     # Aggregate: { state: { company_id: total } }
     by_state = {}
 
@@ -23,6 +26,9 @@ def compute_company_state_spending(db):
             if not committee_id or total <= 0:
                 continue
 
+            if committee_id in non_candidate_committees:
+                continue
+
             recipient = all_recipients.get(committee_id)
             if not recipient:
                 continue
@@ -31,9 +37,14 @@ def compute_company_state_spending(db):
             if not candidate_details:
                 continue
 
+            # Only count candidates from candidate_ids, not sponsor_candidate_ids
+            candidate_ids = set(recipient.get("candidate_ids", []) or [])
+
             # Collect unique states from associated candidates
             states = set()
-            for candidate in candidate_details.values():
+            for cid, candidate in candidate_details.items():
+                if cid not in candidate_ids:
+                    continue
                 state = candidate.get("state")
                 if state:
                     states.add(state)

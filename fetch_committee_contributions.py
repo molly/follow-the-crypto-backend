@@ -46,10 +46,9 @@ def should_omit(contrib, other_contribs, ids_to_omit):
             return True
         else:
             receipt_type_full = contrib.get("receipt_type_full", "") or ""
-            if re.match(
-                r"(INTEREST/DIVIDENDS|TRANSFER)", receipt_type_full, re.IGNORECASE
-            ):
-                return True
+            if "CONTRIBUTION" in receipt_type_full.upper():
+                return False
+        return True
     if contrib["transaction_id"] in ids_to_omit:
         # Manually excluded transaction, or a parent of a more granularly reported transaction
         return True
