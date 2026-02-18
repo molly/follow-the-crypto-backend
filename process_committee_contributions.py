@@ -4,7 +4,7 @@ Process committee contributions from rawContributions to contributions collectio
 
 import logging
 from datetime import datetime
-from utils import pick
+from utils import pick, compare_names_lastfirst
 
 SHARED_CONTRIBUTION_FIELDS = [
     "contributor_first_name",
@@ -177,10 +177,11 @@ def process_contribution(contrib, db, donorMap):
                 link = "/committees/" + committee["id"]
                 break
     if not link:
-        for individual in db.individuals.values():
-            if individual["name"].upper() == group:
-                link = "/individuals/" + individual["id"]
-                break
+        if "," in group:
+            for individual in db.individuals.values():
+                if compare_names_lastfirst(individual["name"], group):
+                    link = "/individuals/" + individual["id"]
+                    break
 
     if link:
         contrib["link"] = link
@@ -236,7 +237,9 @@ def process_contribution(contrib, db, donorMap):
         # - Trailing whitespace in name fields
         # Use only the first word of first_name + last_name, matching the approach
         # in process_company_contributions.py
-        if contrib.get("contributor_last_name") and contrib.get("contributor_first_name"):
+        if contrib.get("contributor_last_name") and contrib.get(
+            "contributor_first_name"
+        ):
             first_name = contrib["contributor_first_name"].strip().upper().split()[0]
             last_name = contrib["contributor_last_name"].strip().upper()
             rollup_name = f"{last_name}, {first_name}"
@@ -261,9 +264,7 @@ def process_contribution(contrib, db, donorMap):
                 ),
             }
         else:
-            donorMap["groups"][group]["rollup"][rollup_name][
-                "total"
-            ] += 1
+            donorMap["groups"][group]["rollup"][rollup_name]["total"] += 1
             donorMap["groups"][group]["rollup"][rollup_name][
                 "total_receipt_amount"
             ] += round(contrib["contribution_receipt_amount"], 2)
@@ -271,22 +272,18 @@ def process_contribution(contrib, db, donorMap):
             # Set newest/oldest dates
             if (
                 contrib["contribution_receipt_date"]
-                < donorMap["groups"][group]["rollup"][rollup_name][
-                    "oldest"
-                ]
+                < donorMap["groups"][group]["rollup"][rollup_name]["oldest"]
             ):
-                donorMap["groups"][group]["rollup"][rollup_name][
-                    "oldest"
-                ] = contrib["contribution_receipt_date"]
+                donorMap["groups"][group]["rollup"][rollup_name]["oldest"] = contrib[
+                    "contribution_receipt_date"
+                ]
             if (
                 contrib["contribution_receipt_date"]
-                > donorMap["groups"][group]["rollup"][rollup_name][
-                    "newest"
-                ]
+                > donorMap["groups"][group]["rollup"][rollup_name]["newest"]
             ):
-                donorMap["groups"][group]["rollup"][rollup_name][
-                    "newest"
-                ] = contrib["contribution_receipt_date"]
+                donorMap["groups"][group]["rollup"][rollup_name]["newest"] = contrib[
+                    "contribution_receipt_date"
+                ]
 
             # Update the aggregate YTD contribution if this is a new high
             if "contributor_aggregate_ytd" in contrib:

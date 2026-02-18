@@ -90,6 +90,40 @@ def compare_names(name_portion, name, allow_levenstein=False):
     return False
 
 
+def compare_names_lastfirst(name, last_first):
+    """Attempt to match last_first (eg Doe, John) to name (eg John Doe), accounting for typos and common variations."""
+    normalized_name = unidecode(name).upper().split(" ")
+    a_first = normalized_name[0]
+    a_last = normalized_name[-1]
+
+    normalized_last_first = unidecode(last_first).upper().split(", ")
+    b_first = normalized_last_first[1] if len(normalized_last_first) > 1 else ""
+    b_first = b_first.split(" ")[0]  # In case there are middle names or suffixes
+    b_last = normalized_last_first[0]
+
+    if a_last == b_last and a_first == b_first:
+        return True
+
+    first_similar = False
+    last_similar = False
+    if a_last == b_last:
+        last_similar = True
+    elif ratio(a_last, b_last, score_cutoff=0.8) > 0.8:
+        last_similar = True
+
+    if a_first == b_first:
+        first_similar = True
+    elif a_first.startswith(b_first) or b_first.startswith(a_first):
+        # Account for Bens, Chrises, etc.
+        first_similar = True
+    elif ratio(a_first, b_first, score_cutoff=0.8) > 0.8:
+        first_similar = True
+    elif re.match(r"(MRS?|MS)\.?", b_first):
+        first_similar = True
+
+    return first_similar and last_similar
+
+
 def get_expenditure_race_type(expenditure, races=None):
     subrace = expenditure.get("subrace", None)
     if subrace is not None:

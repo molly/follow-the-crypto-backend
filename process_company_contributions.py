@@ -1,5 +1,5 @@
 from get_missing_recipients import get_missing_recipient_data
-from utils import pick
+from utils import pick, compare_names_lastfirst
 
 ROLLUP_THRESHOLD = 10000
 
@@ -106,27 +106,6 @@ def process_company_contributions(db, session):
         contributions = company.get("contributions", {})
         related_individuals = company.get("relatedIndividuals", [])
 
-        # Build a mapping from individual names to their IDs for attribution
-        individual_name_map = {}
-        for ind in related_individuals:
-            # Store both the display name and the ID-based name for matching
-            individual_name_map[ind["name"].upper()] = ind["id"]
-            # Also add the ID-based name (with hyphens replaced by spaces)
-            id_name = ind["id"].replace("-", " ").upper()
-            individual_name_map[id_name] = ind["id"]
-            # Also add "Last, First" format (how FEC data comes in)
-            name_parts = ind["name"].split()
-            if len(name_parts) >= 2:
-                first_name = name_parts[0]
-                last_name = name_parts[-1]
-                # Convert "First Last" to "Last, First"
-                last_first = f"{last_name}, {' '.join(name_parts[:-1])}".upper()
-                individual_name_map[last_first] = ind["id"]
-                # Also add just "Last, First" without middle names (for matching variations)
-                # This handles cases like "CHOI, EMILIE A" matching "Emilie Choi"
-                last_first_simple = f"{last_name}, {first_name}".upper()
-                individual_name_map[last_first_simple] = ind["id"]
-
         # Collect existing transaction_ids from company contributions to dedup
         existing_transaction_ids = set()
         # Also add individual attribution to company contributions where applicable
@@ -138,22 +117,11 @@ def process_company_contributions(db, session):
                 # These will have already been filtered by occupation allowlist in company_spending.py
                 if c.get("contributor_first_name") and c.get("contributor_last_name"):
                     c["isIndividual"] = True
-                    # Check if they match a related individual
-                    contributor_name = c.get("contributor_name", "").upper()
-                    if contributor_name in individual_name_map:
-                        c["individual"] = individual_name_map[contributor_name]
-                    else:
-                        # Try matching with just first and last name (strip middle initials)
-                        # FEC data: "CHOI, EMILIE A" -> "CHOI, EMILIE"
-                        parts = contributor_name.split(", ", 1)
-                        if len(parts) == 2:
-                            last = parts[0]
-                            first_parts = parts[1].split()
-                            if first_parts:
-                                first = first_parts[0]
-                                simplified = f"{last}, {first}"
-                                if simplified in individual_name_map:
-                                    c["individual"] = individual_name_map[simplified]
+                    contributor_name = c.get("contributor_name", "")
+                    for ind in related_individuals:
+                        if compare_names_lastfirst(ind["name"], contributor_name):
+                            c["individual"] = ind["id"]
+                            break
 
         for ind in related_individuals:
             ind_data = individuals_data.get(ind["id"])
