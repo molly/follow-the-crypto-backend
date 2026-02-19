@@ -109,3 +109,22 @@ STATES_BY_FULL = {
 }
 
 SINGLE_MEMBER_STATES = ["AK", "DE", "ND", "SD", "VT", "WY"]
+
+# Known special elections for the current cycle.
+# Maps "{state}-{election_name}" to election year.
+# Used both to build the correct Ballotpedia URL and to decide whether a
+# "-special" suffix on an FEC expenditure race key is legitimate.
+SPECIAL_ELECTIONS = {
+    "OH-S": 2026,
+    "FL-S": 2026,
+    "NJ-H-11": 2026,
+    "GA-H-14": 2026,
+    "CA-H-01": 2026,
+    # Districts where the special election completed in 2025 and a regular
+    # election for the same seat is upcoming in 2026.  Expenditures with
+    # election_type "S…" for these races belong to the special election;
+    # all others belong to the regular 2026 race.
+    "FL-H-06": 2025,
+    "VA-H-11": 2025,
+    "FL-H-01": 2025
+}

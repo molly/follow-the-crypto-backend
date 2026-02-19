@@ -27,7 +27,10 @@ to_skip = {
     "Chandiha Gajapathy",
     "Gavin Solomon",
     "Robb Huhn",
-    "Kaley Aldrich"
+    "Kaley Aldrich",
+    "Charles Hoelter",
+    "Leah Toomim",
+    "Thomas Vo"
 }
 
 

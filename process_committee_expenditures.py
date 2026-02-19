@@ -1,3 +1,6 @@
+from states import SPECIAL_ELECTIONS
+
+
 def sort_and_slice(lst, length=10):
     def get_date(x):
         date = x.get("expenditure_date")
@@ -20,7 +23,11 @@ def get_race_name(expenditure):
     ):
         race += "-" + expenditure["candidate_office_district"]
     election_type = expenditure.get("election_type") or ""
-    if election_type.startswith("S"):
+    # Only append "-special" when the race is a known special election.
+    # election_type "S..." means "special" in FEC data, but filers sometimes use
+    # it for regular-cycle candidates, which would create spurious special-election
+    # entries.  Gating on SPECIAL_ELECTIONS prevents that.
+    if election_type.startswith("S") and race in SPECIAL_ELECTIONS:
         race += "-special"
     return race
 

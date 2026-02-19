@@ -156,6 +156,11 @@ def summarize_recipients(db):
                                     "candidate_details"
                                 ] = candidate_details
                 recipients[beneficiary]["total"] += group["total"]
+                if "by_committee" not in recipients[beneficiary]:
+                    recipients[beneficiary]["by_committee"] = {}
+                if committee_id not in recipients[beneficiary]["by_committee"]:
+                    recipients[beneficiary]["by_committee"][committee_id] = 0
+                recipients[beneficiary]["by_committee"][committee_id] += group["total"]
                 if company_id not in recipients[beneficiary]["contributions"]:
                     recipients[beneficiary]["contributions"][company_id] = {
                         "company_id": company_id,

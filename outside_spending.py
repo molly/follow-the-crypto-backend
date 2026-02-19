@@ -37,6 +37,19 @@ def update_candidate_outside_spending(db, session):
                 ]
                 candidate_id_chunks = split_into_chunks(candidate_ids)
                 outside_spending = {}
+
+                # When both a regular race and a special race exist for the
+                # same seat (e.g. H-06 and H-06-special), the same candidate
+                # can appear in both.  Filter by election_type so that
+                # S-typed expenditures (special election) only count toward
+                # the special race and all others count toward the regular race.
+                is_special_race = race_id.endswith("-special")
+                base_race_id = race_id[: -len("-special")] if is_special_race else race_id
+                has_both_races = (
+                    base_race_id in state_data
+                    and f"{base_race_id}-special" in state_data
+                )
+
                 for chunk in candidate_id_chunks:
                     last_index = None
                     last_expenditure_date = None
@@ -63,6 +76,16 @@ def update_candidate_outside_spending(db, session):
                             if result["memoed_subtotal"]:
                                 # Avoid double-counting memoed items
                                 continue
+                            # When a race has both a regular and special
+                            # counterpart, route each expenditure to the
+                            # correct one based on election_type.
+                            if has_both_races:
+                                exp_election_type = result.get("election_type") or ""
+                                exp_is_special = exp_election_type.startswith("S")
+                                if is_special_race and not exp_is_special:
+                                    continue
+                                if not is_special_race and exp_is_special:
+                                    continue
                             result["subrace"] = get_expenditure_race_type(
                                 result, race_data["races"]
                             )
@@ -138,6 +161,14 @@ def update_candidate_outside_spending(db, session):
                                     # This was amended, so replace the transaction from above.
                                     amendment = True
                                 else:
+                                    continue
+                            # Same special/regular filtering as the main loop above.
+                            if has_both_races:
+                                exp_election_type = result.get("election_type") or ""
+                                exp_is_special = exp_election_type.startswith("S")
+                                if is_special_race and not exp_is_special:
+                                    continue
+                                if not is_special_race and exp_is_special:
                                     continue
                             result["subrace"] = get_expenditure_race_type(
                                 result, race_data["races"]

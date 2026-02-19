@@ -144,8 +144,13 @@ def summarize_races(db, session):
                         "withdrew_race": None,  # Race from which candidate withdrew
                     }
 
-            # Try to get candidate data from FEC
-            election_year = race_data.get("year", 2026)
+            # Try to get candidate data from FEC.
+            # The stored "year" can be an odd year for special elections
+            # (e.g. 2025 for a January 2025 special).  The FEC candidates/search
+            # endpoint only accepts even cycle years, so round up to the next
+            # even year when necessary.
+            stored_year = race_data.get("year", 2026)
+            election_year = stored_year if stored_year % 2 == 0 else stored_year + 1
             params = {
                 "office": race_id_split[0],
                 "state": state,
@@ -223,6 +228,10 @@ def summarize_races(db, session):
                     if entry["common_name"] and entry["common_name"] in db.candidates:
                         # A few weird edge cases are in the candidates constant, get that data here
                         c_id = db.candidates[entry["common_name"]]
+                        # Normalize through candidateAliases so that a stale House ID
+                        # (e.g. H8WY00148) resolves to the canonical Senate ID
+                        # (e.g. S0WY00137) and matches what allRecipients stores.
+                        c_id = db.candidate_aliases.get(c_id, c_id)
                         FEC_candidates_data = FEC_fetch(
                             session,
                             f"candidates data for {state}",
@@ -279,6 +288,11 @@ def summarize_races(db, session):
                 for candidate in race["candidates"]:
                     # Add this subrace to their list of involved races
                     candidates_data[candidate["name"]]["races"].append(race["type"])
+                    # Use party from race data as a fallback for candidates FEC didn't
+                    # find (e.g., incumbents who declined to run in 2026 and therefore
+                    # don't appear in the FEC candidates/search results for this cycle).
+                    if "party" not in candidates_data[candidate["name"]] and "party" in candidate:
+                        candidates_data[candidate["name"]]["party"] = candidate["party"]
                     if is_upcoming is True or (
                         "won" in candidate
                         and candidate["won"] is True
@@ -414,9 +428,9 @@ def summarize_races(db, session):
                 if (
                     candidates_data[candidate]["support_total"] == 0
                     and candidates_data[candidate]["oppose_total"] == 0
-                    and candidates_data[candidate].get("candidate_id", "")
+                    and not candidates_data[candidate].get("declined")
                 ):
-                    # There can be a lot of withdrawn candidates, so only keep those involved in some expenditure
+                    # There can be a lot of withdrawn candidates, so only keep those involved in some expenditure or who declined
                     del candidates_data[candidate]
                     del race_data["withdrew"][candidate]
                 else:
