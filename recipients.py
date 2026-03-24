@@ -4,6 +4,7 @@ INDIVIDUAL_KEYS = [
     "individual",
     "contributor_name",
     "contributor_occupation",
+    "individual_employer",
     "isIndividual",
 ]
 
@@ -178,6 +179,119 @@ def summarize_recipients(db):
                     recipients[beneficiary]["contributions"][company_id][
                         "contributions"
                     ],
+                    db.committees,
+                    all_recipient_committees,
+                    committee_name_to_type,
+                )
+
+    # Also bring in contributions from tracked individuals not associated with any
+    # tracked company. These individuals have their own page but their contributions
+    # wouldn't otherwise appear in recipientsWithContribs because this function only
+    # reads from the companies collection.
+    tracked_company_names = {data.get("name") for data in db.companies.values()}
+    affiliated_individual_ids = {
+        ind_id
+        for ind_id, ind in db.individuals.items()
+        if any(c in tracked_company_names for c in ind.get("company", []))
+    }
+    for doc in db.client.collection("individuals").stream():
+        ind_id = doc.id
+        if ind_id in affiliated_individual_ids:
+            continue
+        if ind_id not in db.individuals:
+            continue
+        ind = doc.to_dict()
+        if not ind:
+            continue
+        ind_meta = db.individuals[ind_id]
+        ind_name = ind_meta.get("name", ind_id)
+        # Convert "LAST, FIRST" to "First Last" for display
+        name_parts = ind_name.split(", ", 1)
+        if len(name_parts) == 2:
+            display_name = f"{name_parts[1].title()} {name_parts[0].title()}"
+        else:
+            display_name = ind_name.title()
+
+        for group_data in ind.get("contributions", []):
+            committee_id = group_data.get("committee_id")
+            if not committee_id:
+                continue
+            total = group_data.get("total", 0)
+            if total <= 0:
+                continue
+            recipient_committee = all_recipient_committees.get(committee_id)
+            if not recipient_committee:
+                beneficiaries = [committee_id]
+            else:
+                beneficiaries = get_beneficiaries(
+                    group_data, recipient_committee, db.non_candidate_committees
+                )
+            seen = set()
+            normalized_beneficiaries = []
+            for b in beneficiaries:
+                if b in db.candidate_aliases:
+                    b = db.candidate_aliases[b]
+                if b not in seen:
+                    seen.add(b)
+                    normalized_beneficiaries.append(b)
+            for beneficiary in normalized_beneficiaries:
+                if beneficiary not in recipients:
+                    recipients[beneficiary] = {
+                        "total": 0,
+                        "type": "committee",
+                        "contributions": {},
+                    }
+                    if recipient_committee:
+                        recipients[beneficiary]["committee_details"] = pick(
+                            recipient_committee,
+                            [
+                                "committee_type_full",
+                                "description",
+                                "designation_full",
+                                "committee_name",
+                                "committee_id",
+                            ],
+                        )
+                    if beneficiary[0] != "C":
+                        recipients[beneficiary]["type"] = "candidate"
+                        if recipient_committee:
+                            candidate_details = recipient_committee.get(
+                                "candidate_details", {}
+                            ).get(beneficiary, None)
+                            if candidate_details:
+                                recipients[beneficiary][
+                                    "candidate_details"
+                                ] = candidate_details
+                recipients[beneficiary]["total"] += total
+                if "by_committee" not in recipients[beneficiary]:
+                    recipients[beneficiary]["by_committee"] = {}
+                if committee_id not in recipients[beneficiary]["by_committee"]:
+                    recipients[beneficiary]["by_committee"][committee_id] = 0
+                recipients[beneficiary]["by_committee"][committee_id] += total
+                if ind_id not in recipients[beneficiary]["contributions"]:
+                    recipients[beneficiary]["contributions"][ind_id] = {
+                        "company_id": ind_id,
+                        "company_name": display_name,
+                        "individual_id": ind_id,
+                        "total": 0,
+                        "contributions": {},
+                    }
+                recipients[beneficiary]["contributions"][ind_id]["total"] += total
+                ind_employer = ", ".join(ind_meta.get("company", []))
+                contribs_with_attribution = [
+                    {
+                        **c,
+                        "isIndividual": True,
+                        "individual": ind_id,
+                        **({"individual_employer": ind_employer} if ind_employer else {}),
+                    }
+                    for c in group_data.get("contributions", [])
+                ]
+                recipients[beneficiary]["contributions"][ind_id][
+                    "contributions"
+                ] = group_contributions(
+                    contribs_with_attribution,
+                    recipients[beneficiary]["contributions"][ind_id]["contributions"],
                     db.committees,
                     all_recipient_committees,
                     committee_name_to_type,

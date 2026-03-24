@@ -94,10 +94,18 @@ def summarize_races(db, session):
             for race in race_data.get("races", []):
                 candidates_by_name = {}
                 for candidate in race.get("candidates", []):
-                    name = candidate["name"]
+                    name = candidate.get("name")
+                    if name is None:
+                        logging.warning(
+                            f"Candidate missing 'name' field in {state} {race_id}, skipping: {candidate}"
+                        )
+                        continue
                     if name not in candidates_by_name:
                         candidates_by_name[name] = candidate
-                    elif "withdrew_race" in candidates_by_name[name] and "withdrew_race" not in candidate:
+                    elif (
+                        "withdrew_race" in candidates_by_name[name]
+                        and "withdrew_race" not in candidate
+                    ):
                         # Replace withdrawn version with non-withdrawn version
                         candidates_by_name[name] = candidate
                 race["candidates"] = list(candidates_by_name.values())
@@ -114,7 +122,8 @@ def summarize_races(db, session):
                     for candidate in race["candidates"]
                 }
             except KeyError as e:
-                logging.error(f"Missing race data for {state} {race_id}")
+                logging.error(f"Missing race data for {state} {race_id}: {e}")
+                continue
             # Create dict with an entry for each candidate. This dict will eventually be saved to the "candidates" field
             # in the race entry.
             candidates_data = {
@@ -179,7 +188,7 @@ def summarize_races(db, session):
                 # Try to match FEC candidate result to candidate in our data
                 split_name = FEC_candidate_data["name"].split(", ")
                 last_name = split_name[0]
-                first_name = split_name[1].split(" ")[0]
+                first_name = split_name[1].split(" ")[0] if len(split_name) > 1 else ""
 
                 # Get the common name for this candidate
                 candidate_race_name = None
@@ -238,6 +247,8 @@ def summarize_races(db, session):
                             "https://api.open.fec.gov/v1/candidates/search",
                             {"candidate_id": [c_id]},
                         )
+                        if not FEC_candidates_data["results"]:
+                            continue
                         FEC_candidate_data = FEC_candidates_data["results"][0]
                         names[FEC_candidate_data["name"]] = entry["common_name"]
                         candidates_data[entry["common_name"]][
@@ -291,7 +302,10 @@ def summarize_races(db, session):
                     # Use party from race data as a fallback for candidates FEC didn't
                     # find (e.g., incumbents who declined to run in 2026 and therefore
                     # don't appear in the FEC candidates/search results for this cycle).
-                    if "party" not in candidates_data[candidate["name"]] and "party" in candidate:
+                    if (
+                        "party" not in candidates_data[candidate["name"]]
+                        and "party" in candidate
+                    ):
                         candidates_data[candidate["name"]]["party"] = candidate["party"]
                     if is_upcoming is True or (
                         "won" in candidate
@@ -353,6 +367,16 @@ def summarize_races(db, session):
                     }
                     if len(ks) == 1:
                         k = ks.pop()
+                    elif len(ks) > 1:
+                        # If there are multiple candidates with the same last name, try to narrow down by first name
+                        k = None
+                        filtered = [
+                            k
+                            for k in ks
+                            if expenditure["candidate_first_name"].upper() in k
+                        ]
+                        if len(filtered) == 1:
+                            k = filtered[0]
                     if k is None:
                         # TODO: We're going to have to figure out something else if we end up here.
                         logging.error(
@@ -475,12 +499,15 @@ def summarize_races(db, session):
                 for c in candidates_data.values()
                 if "candidate_id" in c
             ]
+            # FEC cycles are always even years. If the election_year is odd
+            # (e.g. a 2025 special election), round up to the next even year.
+            fec_cycle = election_year if election_year % 2 == 0 else election_year + 1
             FEC_totals_data = FEC_fetch(
                 session,
                 "candidate totals",
                 "https://api.open.fec.gov/v1/candidates/totals",
                 {
-                    "cycle": 2026,
+                    "cycle": fec_cycle,
                     "per_page": 50,
                     "candidate_id": candidate_ids,
                 },

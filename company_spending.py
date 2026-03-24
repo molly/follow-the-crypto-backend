@@ -9,11 +9,13 @@ MIN_CONTRIBUTION_AMOUNT = 1000
 
 def is_high_level_individual(contrib, allowlists):
     """Check if a contribution is from a high-level individual based on occupation allowlist.
-    This mirrors the logic in process_committee_contributions.py's is_redacted function."""
+    This mirrors the logic in process_committee_contributions.py's is_redacted function.
+    """
     if contrib.get("claimed", False):
         return True
     if contrib.get("entity_type") in {"ORG", "PAC", "COM"} or (
-        not contrib.get("contributor_first_name") and not contrib.get("contributor_last_name")
+        not contrib.get("contributor_first_name")
+        and not contrib.get("contributor_last_name")
     ):
         # Not an individual contribution
         return False
@@ -21,7 +23,9 @@ def is_high_level_individual(contrib, allowlists):
         # No occupation listed, not a high-level individual
         return False
     occupation = contrib["contributor_occupation"].upper()
-    return occupation in allowlists["equals"] or allowlists["contains"].search(occupation)
+    return occupation in allowlists["equals"] or allowlists["contains"].search(
+        occupation
+    )
 
 
 PICKED_FIELDS = [
@@ -93,7 +97,9 @@ def process_contribution(contrib):
     return contribution
 
 
-def _should_skip(contrib, contrib_ids, ids_to_omit, exact_terms, search_param, occupation_allowlist):
+def _should_skip(
+    contrib, contrib_ids, ids_to_omit, exact_terms, search_param, occupation_allowlist
+):
     """Check if a contribution should be skipped."""
     if should_omit(contrib, contrib_ids, ids_to_omit):
         return True
@@ -147,7 +153,14 @@ def _fetch_processed(
         results = contribution_data["results"]
         ids_to_omit.update(get_ids_to_omit(results))
         for contrib in results:
-            if _should_skip(contrib, contrib_ids, ids_to_omit, exact_terms, search_param, occupation_allowlist):
+            if _should_skip(
+                contrib,
+                contrib_ids,
+                ids_to_omit,
+                exact_terms,
+                search_param,
+                occupation_allowlist,
+            ):
                 continue
             contributions.append(process_contribution(contrib))
             contrib_ids.add(contrib["transaction_id"])
@@ -196,7 +209,14 @@ def _fetch_efiled(
         results = data["results"]
         ids_to_omit.update(get_ids_to_omit(results))
         for contrib in results:
-            if _should_skip(contrib, contrib_ids, ids_to_omit, exact_terms, search_param, occupation_allowlist):
+            if _should_skip(
+                contrib,
+                contrib_ids,
+                ids_to_omit,
+                exact_terms,
+                search_param,
+                occupation_allowlist,
+            ):
                 continue
             contributions.append({**process_contribution(contrib), "efiled": True})
             contrib_ids.add(contrib["transaction_id"])
@@ -220,7 +240,8 @@ def update_spending_by_company(db, session):
             {
                 **company,
                 "relatedIndividuals": related_individuals,
-            }
+            },
+            merge=True,
         )
         search_id = company.get("search_id", str_id.replace("-", " "))
         if isinstance(search_id, list):

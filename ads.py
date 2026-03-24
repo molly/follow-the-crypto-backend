@@ -37,6 +37,7 @@ def get_ads(db):
     QUERY = (
         "SELECT {fields} FROM `bigquery-public-data.google_political_ads.creative_stats` "
         "WHERE advertiser_id IN ({advertisers}) "
+        "AND date_range_start >= '2025-01-01' "
         "GROUP BY {fields}"
     )
     HYDRATED_QUERY = QUERY.format(

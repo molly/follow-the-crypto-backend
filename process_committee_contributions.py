@@ -159,10 +159,14 @@ def process_contribution(contrib, db, donorMap):
         group = contrib["contributor_name"]
     if group and group in db.individual_employers:
         group = contrib["contributor_name"]
-    elif not group:
-        group = "UNKNOWN"
     elif group in db.company_aliases:
         group = db.company_aliases[group]
+    # Final guard: run after all other transformations so it can't be bypassed
+    # by the individual_employers or company_aliases branches above.
+    if not group or group.strip().upper() == "N/A":
+        # Don't merge unrelated contributions under a generic "N/A" group name.
+        # Use transaction_id to give each its own group so they display separately.
+        group = contrib.get("transaction_id") or "UNKNOWN"
 
     link = None
     for company in db.companies.values():
@@ -237,14 +241,13 @@ def process_contribution(contrib, db, donorMap):
         # - Trailing whitespace in name fields
         # Use only the first word of first_name + last_name, matching the approach
         # in process_company_contributions.py
-        if contrib.get("contributor_last_name") and contrib.get(
-            "contributor_first_name"
-        ):
-            first_name = contrib["contributor_first_name"].strip().upper().split()[0]
-            last_name = contrib["contributor_last_name"].strip().upper()
+        last_name = (contrib.get("contributor_last_name") or "").strip().upper()
+        first_name = (contrib.get("contributor_first_name") or "").strip().upper()
+        if last_name and last_name != "N/A" and first_name and first_name != "N/A":
+            first_name = first_name.split()[0]
             rollup_name = f"{last_name}, {first_name}"
         else:
-            rollup_name = contrib["contributor_name"].strip().upper()
+            rollup_name = (contrib.get("contributor_name") or "UNKNOWN").strip().upper()
             if ", " in rollup_name:
                 parts = rollup_name.split(", ", 1)
                 if len(parts) == 2:

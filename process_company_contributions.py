@@ -3,6 +3,45 @@ from utils import pick, compare_names_lastfirst
 
 ROLLUP_THRESHOLD = 10000
 
+
+def get_contribution_id(contrib):
+    """Generate a unique identifier for a contribution for manual review matching."""
+    if contrib.get("transaction_id"):
+        return f"txn_{contrib['transaction_id']}"
+    name = contrib.get("contributor_name", "")
+    amount = contrib.get("total_receipt_amount", 0)
+    date = contrib.get("oldest", "")
+    return f"rollup_{name}_{amount}_{date}"
+
+
+def load_all_existing_reviews(db):
+    """Load all existing manualReview flags from the companies collection.
+
+    Must be called before any processing to capture reviews before contributions
+    are overwritten by the pipeline.
+    """
+    all_reviews = {}
+    for doc in db.client.collection("companies").stream():
+        contributions_data = doc.to_dict().get("contributions", [])
+        # Handle both list format (from previous pipeline run) and dict format
+        if isinstance(contributions_data, dict):
+            groups = contributions_data.values()
+        else:
+            groups = contributions_data
+        reviews = {}
+        for group in groups:
+            for contrib in group.get("contributions", []):
+                review = contrib.get("manualReview")
+                if review and review.get("reviewed"):
+                    contrib_id = get_contribution_id(contrib)
+                    reviews[contrib_id] = {
+                        "manualReview": review,
+                        "description": contrib.get("description"),
+                    }
+        if reviews:
+            all_reviews[doc.id] = reviews
+    return all_reviews
+
 SHARED_CONTRIBUTION_FIELDS = [
     "contributor_first_name",
     "contributor_last_name",
@@ -37,11 +76,21 @@ def redact_contribution(d, keys):
 
 
 def process_company_contributions(db, session):
+    # Load existing manualReview flags BEFORE the pipeline overwrites contributions
+    existing_reviews = load_all_existing_reviews(db)
+
     recipients_doc = db.client.collection("allRecipients").document("recipients").get()
     all_recipients = recipients_doc.to_dict() if recipients_doc.exists else {}
     if not all_recipients:
         all_recipients = {}
     new_recipients = set()
+
+    # Track individual contribution transaction IDs attributed via raw company FEC data.
+    # Individual contributions may be returned by multiple companies' employer/name
+    # searches (e.g. a founder listed under two related companies), so we deduplicate
+    # globally to prevent the same contribution from being attributed to more than one
+    # company.
+    raw_attributed_individual_ids = set()
 
     for doc in db.client.collection("rawCompanyContributions").stream():
         company_id, company = doc.id, doc.to_dict()
@@ -50,18 +99,33 @@ def process_company_contributions(db, session):
         grouped_by_recipient = {}
         for contrib in contributions:
             recipient = contrib["committee_id"]
-            if recipient not in grouped_by_recipient:
-                grouped_by_recipient[recipient] = {
-                    "contributions": [],
-                    "total": 0,
-                    "committee_id": recipient,
-                }
             if recipient not in all_recipients:
                 new_recipients.add(recipient)
                 all_recipients[recipient] = {
                     "committee_id": recipient,
                     "candidate_details": {},
                     "needs_data": True,
+                }
+
+            # Deduplicate individual contributions across companies. The same
+            # person's contribution can appear in multiple companies' raw FEC data
+            # when their name or employer matches several search terms. Only
+            # attribute it to the first company that claims it.
+            transaction_id = contrib.get("transaction_id")
+            if (
+                contrib.get("contributor_first_name")
+                and contrib.get("contributor_last_name")
+                and transaction_id
+            ):
+                if transaction_id in raw_attributed_individual_ids:
+                    continue
+                raw_attributed_individual_ids.add(transaction_id)
+
+            if recipient not in grouped_by_recipient:
+                grouped_by_recipient[recipient] = {
+                    "contributions": [],
+                    "total": 0,
+                    "committee_id": recipient,
                 }
             grouped_by_recipient[recipient]["contributions"].append(contrib)
             grouped_by_recipient[recipient]["total"] += contrib[
@@ -102,10 +166,14 @@ def process_company_contributions(db, session):
     # Summarize spending by party
     all_companies_total = 0
     all_companies_by_party = {}
+    all_companies_by_company = {}
     # Track individual contribution transaction IDs that have already been attributed
     # to a company, to prevent double-counting when an individual is associated with
     # multiple companies (e.g. a founder of two related companies).
-    globally_attributed_individual_transaction_ids = set()
+    # Pre-populate from raw FEC data attributions so that contributions already
+    # captured via employer/name searches are not re-attributed via the individuals
+    # collection.
+    globally_attributed_individual_transaction_ids = set(raw_attributed_individual_ids)
     for company_id, company in companies_list:
         contributions = company.get("contributions", {})
         related_individuals = company.get("relatedIndividuals", [])
@@ -117,9 +185,16 @@ def process_company_contributions(db, session):
             for c in group_data.get("contributions", []):
                 if "transaction_id" in c:
                     existing_transaction_ids.add(c["transaction_id"])
-                # Check if this is an individual contribution (has first and last name)
+                # Check if this is an individual contribution (has first and last name).
+                # "N/A" in name fields means the field was filled with a placeholder,
+                # not a real name, so exclude those.
                 # These will have already been filtered by occupation allowlist in company_spending.py
-                if c.get("contributor_first_name") and c.get("contributor_last_name"):
+                if (
+                    c.get("contributor_first_name")
+                    and c.get("contributor_first_name").upper() != "N/A"
+                    and c.get("contributor_last_name")
+                    and c.get("contributor_last_name").upper() != "N/A"
+                ):
                     c["isIndividual"] = True
                     contributor_name = c.get("contributor_name", "")
                     for ind in related_individuals:
@@ -139,6 +214,13 @@ def process_company_contributions(db, session):
                 for c in group_data["contributions"]:
                     transaction_id = c.get("transaction_id")
                     if transaction_id in existing_transaction_ids:
+                        # This contribution is already in this company's raw data.
+                        # Register it globally so other companies that share this
+                        # individual won't also claim it via the individuals collection.
+                        if transaction_id is not None:
+                            globally_attributed_individual_transaction_ids.add(
+                                transaction_id
+                            )
                         continue
                     if transaction_id in globally_attributed_individual_transaction_ids:
                         continue
@@ -173,7 +255,7 @@ def process_company_contributions(db, session):
 
                 # Normalize name for grouping (strip middle initials and normalize case)
                 # "LAST, FIRST MIDDLE" -> "LAST, FIRST" for consistent grouping
-                # Convert to uppercase for case-insensitive matching
+                # Convert to uppercase for case-insensitive matching.
                 normalized_name = contributor_name.upper()
                 if ", " in contributor_name:
                     parts = contributor_name.split(", ", 1)
@@ -184,8 +266,10 @@ def process_company_contributions(db, session):
                             first = first_parts[0].upper()
                             normalized_name = f"{last}, {first}"
 
-                if amount >= ROLLUP_THRESHOLD:
-                    # Large contributions are kept separate
+                if amount >= ROLLUP_THRESHOLD or normalized_name == "N/A":
+                    # Large contributions are kept separate, as are contributions
+                    # with no meaningful name — keeping each N/A entry distinct
+                    # prevents unrelated entities from being merged under one "N/A" group.
                     large_contributions.append(contrib)
                 else:
                     # Small contributions are rolled up by contributor (using normalized name)
@@ -236,6 +320,26 @@ def process_company_contributions(db, session):
                 reverse=True,
             )
 
+        # Merge back manualReview flags and recompute group totals excluding omitted
+        company_reviews = existing_reviews.get(company_id, {})
+        for group_data in contributions.values():
+            reviewed_total = 0
+            for contrib in group_data["contributions"]:
+                contrib_id = get_contribution_id(contrib)
+                if contrib_id in company_reviews:
+                    saved = company_reviews[contrib_id]
+                    contrib["manualReview"] = saved["manualReview"]
+                    if saved.get("description"):
+                        contrib["description"] = saved["description"]
+                review = contrib.get("manualReview")
+                if not (review and review.get("status") == "omit"):
+                    amount = (
+                        contrib.get("contribution_receipt_amount")
+                        or contrib.get("total_receipt_amount", 0)
+                    )
+                    reviewed_total += amount
+            group_data["total"] = round(reviewed_total, 2)
+
         party_summary = {}
         for committee_id, group_data in contributions.items():
             party = "UNK"
@@ -260,6 +364,10 @@ def process_company_contributions(db, session):
             party_summary[party] += group_data["total"]
 
         company_total = sum(party_summary.values())
+        all_companies_by_company[company_id] = {
+            "total": round(company_total, 2),
+            "by_party": {k: round(v, 2) for k, v in party_summary.items()},
+        }
         all_companies_total += company_total
         for party, amount in party_summary.items():
             if party not in all_companies_by_party:
@@ -278,6 +386,7 @@ def process_company_contributions(db, session):
         {
             "total": round(all_companies_total, 2),
             "by_party": {k: round(v, 2) for k, v in all_companies_by_party.items()},
+            "by_company": all_companies_by_company,
         }
     )
 

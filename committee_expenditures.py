@@ -128,7 +128,12 @@ def update_committee_expenditures(db, session):
                 uid = "{}-{}".format(exp["committee_id"], exp["transaction_id"])
                 exp["uid"] = uid
                 if exp["amendment_indicator"] == "A":
-                    if uid in transactions and (
+                    if uid not in transactions:
+                        # Original was never in the processed endpoint (e.g. it was
+                        # filed and immediately corrected); treat the amendment as
+                        # the authoritative record.
+                        transactions[uid] = pick(exp, EXPENDITURE_FIELDS)
+                    elif (
                         (
                             not transactions[uid].get("amendment_indicator", None)
                             or transactions[uid].get("amendment_indicator", None) == "N"

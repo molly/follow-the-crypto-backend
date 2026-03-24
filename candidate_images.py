@@ -30,7 +30,13 @@ to_skip = {
     "Kaley Aldrich",
     "Charles Hoelter",
     "Leah Toomim",
-    "Thomas Vo"
+    "Thomas Vo",
+    "Blake Stanley",
+    "Samuel Forstag",
+    "Jullie Kelley",
+    "Joshua Kolasinski",
+    "Kirt Burgess",
+    "Jeffrey Kanter"
 }
 
 

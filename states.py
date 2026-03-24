@@ -126,5 +126,5 @@ SPECIAL_ELECTIONS = {
     # all others belong to the regular 2026 race.
     "FL-H-06": 2025,
     "VA-H-11": 2025,
-    "FL-H-01": 2025
+    "FL-H-01": 2025,
 }

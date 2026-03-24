@@ -43,6 +43,9 @@ def should_omit(contrib, other_contribs, ids_to_omit):
         return True
     if contrib["line_number"] == "17":
         if "receipt_type_full" not in contrib:
+            print(f"{contrib["contribution_receipt_date"]} - {contrib["contributor_name"]}: {contrib["contribution_receipt_amount"]} to {contrib["committee"]["name"]}. {contrib["pdf_url"]}")
+            if contrib.get("transaction_id", "") == "SA17.5207":
+                return False
             return True
         else:
             receipt_type_full = contrib.get("receipt_type_full", "") or ""

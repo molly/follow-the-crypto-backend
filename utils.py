@@ -38,12 +38,16 @@ def chunk(lst, chunk_size=10):
     giveup=fatal_code,
 )
 def FEC_fetch(session, description, url, params={}):
+    headers = {}
+    if "efile" in url:
+        headers["Cache-Control"] = "no-cache"
     r = session.get(
         url,
         params={
             **params,
             "api_key": os.environ["FEC_API_KEY"],
         },
+        headers=headers,
         timeout=30,
     )
     if r.status_code == 404:
@@ -204,7 +208,7 @@ def get_beneficiaries(contributionGroup, recipientCommittee, nonCandidateCommitt
         recipientCommittee["committee_id"] or contributionGroup["committee_id"]
     )
     if committee_id in nonCandidateCommittees:
-        return committee_id
+        return [committee_id]
     if (
         recipientCommittee
         and "candidate_ids" in recipientCommittee

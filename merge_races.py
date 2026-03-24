@@ -153,6 +153,14 @@ def save_scraped_races(db_client, state: str, race_data: Dict[str, Any]) -> None
             # If no reviewed races exist yet, initialize with scraped data
             race_group['races'] = scraped_races
 
+        # Preserve candidates and spending fields set by summarize_races
+        existing_candidates = existing_group.get('candidates', {})
+        existing_spending = existing_group.get('spending', {})
+        if existing_candidates:
+            race_group['candidates'] = existing_candidates
+        if existing_spending:
+            race_group['spending'] = existing_spending
+
         logging.info(
             f"{state}/{race_id}: Saved {len(scraped_races)} scraped races"
         )

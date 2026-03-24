@@ -44,12 +44,18 @@ def update_candidate_outside_spending(db, session):
                 # S-typed expenditures (special election) only count toward
                 # the special race and all others count toward the regular race.
                 is_special_race = race_id.endswith("-special")
-                base_race_id = race_id[: -len("-special")] if is_special_race else race_id
+                base_race_id = (
+                    race_id[: -len("-special")] if is_special_race else race_id
+                )
                 has_both_races = (
                     base_race_id in state_data
                     and f"{base_race_id}-special" in state_data
                 )
 
+                election_year = race_data.get("year", 2026)
+                fec_cycle = (
+                    election_year if election_year % 2 == 0 else election_year + 1
+                )
                 for chunk in candidate_id_chunks:
                     last_index = None
                     last_expenditure_date = None
@@ -63,7 +69,7 @@ def update_candidate_outside_spending(db, session):
                             {
                                 "candidate_id": chunk,
                                 "per_page": 100,
-                                "cycle": 2026,
+                                "cycle": fec_cycle,
                                 "is_notice": True,
                                 "most_recent": True,
                                 "last_index": last_index,
