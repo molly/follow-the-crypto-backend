@@ -11,7 +11,7 @@ class Database:
         gcreds = app.credential.get_credential()
         project_id = app.project_id
         self.client = firestore.Client(
-            credentials=gcreds, project=project_id, database="follow-the-crypto-2026"
+            credentials=gcreds, project=project_id, database="techfunded"
         )
         self.committees = None
         self.company_aliases = None

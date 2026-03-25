@@ -1,4 +1,5 @@
 from utils import pick, get_beneficiaries
+from recipient_utils import get_all_recipients
 
 INDIVIDUAL_KEYS = [
     "individual",
@@ -96,11 +97,7 @@ def group_contributions(
 
 def summarize_recipients(db):
     recipients = {}
-    all_recipient_committees = (
-        db.client.collection("allRecipients").document("recipients").get().to_dict()
-    )
-    if not all_recipient_committees:
-        all_recipient_committees = {}
+    all_recipient_committees = get_all_recipients(db)
     committee_name_to_type = {
         v["committee_name"]: v.get("committee_type_full")
         for v in all_recipient_committees.values()

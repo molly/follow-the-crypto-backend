@@ -1,4 +1,5 @@
 from get_missing_recipients import get_missing_recipient_data
+from recipient_utils import get_all_recipients, set_all_recipients
 from utils import pick, compare_names_lastfirst
 
 ROLLUP_THRESHOLD = 10000
@@ -79,10 +80,7 @@ def process_company_contributions(db, session):
     # Load existing manualReview flags BEFORE the pipeline overwrites contributions
     existing_reviews = load_all_existing_reviews(db)
 
-    recipients_doc = db.client.collection("allRecipients").document("recipients").get()
-    all_recipients = recipients_doc.to_dict() if recipients_doc.exists else {}
-    if not all_recipients:
-        all_recipients = {}
+    all_recipients = get_all_recipients(db)
     new_recipients = set()
 
     # Track individual contribution transaction IDs attributed via raw company FEC data.
@@ -138,7 +136,7 @@ def process_company_contributions(db, session):
 
     # Get recipient data and record any new committees
     recipients = get_missing_recipient_data(all_recipients, db, session)
-    db.client.collection("allRecipients").document("recipients").set(recipients)
+    set_all_recipients(db, recipients)
 
     # Bring in spending by related individuals
     # First, collect all unique individual IDs we need to fetch

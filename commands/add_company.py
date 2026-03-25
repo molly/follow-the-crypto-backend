@@ -5,7 +5,11 @@ Command to add a new company to track and fetch their initial data.
 Usage:
     python -m commands.add_company --id "example-corp" --name "Example Corp" --category "exchange"
     python -m commands.add_company --id "crypto-ventures" --name "Crypto Ventures" --category "capital" --country "USA"
+    python -m commands.add_company --id "openai" --name "OpenAI" --category "lab" --sector "ai"
 """
+
+VALID_SECTORS = {"crypto", "ai", "tech"}
+DEFAULT_SECTOR = "crypto"
 
 import argparse
 import logging
@@ -146,6 +150,7 @@ def main():
     parser.add_argument("--category", action="append", help="Company category (can be specified multiple times: exchange, capital, etc.)")
     parser.add_argument("--description", help="Company description")
     parser.add_argument("--country", default="USA", help="Country (defaults to USA)")
+    parser.add_argument("--sector", default=DEFAULT_SECTOR, choices=sorted(VALID_SECTORS), help=f"Industry sector (default: {DEFAULT_SECTOR})")
     parser.add_argument("--no-fetch", action="store_true", help="Don't fetch data immediately")
 
     args = parser.parse_args()
@@ -172,6 +177,8 @@ def main():
 
     if args.description:
         company_data["description"] = args.description
+
+    company_data["sector"] = args.sector
 
     # Set up logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

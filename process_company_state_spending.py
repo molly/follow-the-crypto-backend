@@ -1,4 +1,5 @@
 from collections import defaultdict
+from recipient_utils import get_all_recipients
 
 
 def compute_company_state_spending(db):
@@ -13,8 +14,7 @@ def compute_company_state_spending(db):
     stored as prior_cycle_details and prior_cycle_companies_total.
     """
     # Load recipient data (maps committee_id -> candidate_details with state info)
-    recipients_doc = db.client.collection("allRecipients").document("recipients").get()
-    all_recipients = recipients_doc.to_dict() if recipients_doc.exists else {}
+    all_recipients = get_all_recipients(db)
 
     # Load non-candidate committees to skip (same as get_beneficiaries)
     non_candidate_committees = db.non_candidate_committees or set()

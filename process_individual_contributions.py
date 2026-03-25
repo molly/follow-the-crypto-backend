@@ -1,6 +1,7 @@
 import logging
 import re
 from get_missing_recipients import get_missing_recipient_data
+from recipient_utils import get_all_recipients, set_all_recipients
 
 
 def all_unique(numbers):
@@ -256,10 +257,7 @@ def process_contribution_group(group):
 
 
 def process_individual_contributions(db, session):
-    recipients_doc = db.client.collection("allRecipients").document("recipients").get()
-    all_recipients = recipients_doc.to_dict() if recipients_doc.exists else {}
-    if not all_recipients:
-        all_recipients = {}
+    all_recipients = get_all_recipients(db)
     new_recipients = set()
 
     for doc in db.client.collection("rawIndividualContributions").stream():
@@ -356,7 +354,7 @@ def process_individual_contributions(db, session):
 
     # Get recipient data and record any new committees
     recipients = get_missing_recipient_data(all_recipients, db, session)
-    db.client.collection("allRecipients").document("recipients").set(recipients)
+    set_all_recipients(db, recipients)
 
     # Summarize spending by party
     # Sadly can't do this in the first loop because it relies on data from get_missing_recipient_data

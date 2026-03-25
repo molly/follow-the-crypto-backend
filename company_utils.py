@@ -3,6 +3,7 @@ Shared utility functions for company contribution processing.
 """
 from requests_cache import CachedSession
 from get_missing_recipients import get_missing_recipient_data
+from recipient_utils import get_all_recipients, set_all_recipients
 
 
 def update_company_contributions_selective(db, company_ids):
@@ -16,10 +17,7 @@ def update_company_contributions_selective(db, company_ids):
     Returns:
         set: Set of new recipient IDs that were discovered
     """
-    recipients_doc = db.client.collection("allRecipients").document("recipients").get()
-    all_recipients = recipients_doc.to_dict() if recipients_doc.exists else {}
-    if not all_recipients:
-        all_recipients = {}
+    all_recipients = get_all_recipients(db)
     new_recipients = set()
 
     # Batch fetch all companies at once
@@ -108,6 +106,6 @@ def update_company_contributions_selective(db, company_ids):
     if new_recipients:
         session = CachedSession("cache", backend="filesystem")
         recipients = get_missing_recipient_data(all_recipients, db, session)
-        db.client.collection("allRecipients").document("recipients").set(recipients)
+        set_all_recipients(db, recipients)
 
     return new_recipients
