@@ -14,6 +14,7 @@ from . import candidates
 from . import pacs
 from . import ads_task
 from . import recipients
+from . import recent_contributions
 
 __all__ = [
     "committees",
@@ -30,4 +31,5 @@ __all__ = [
     "pacs",
     "ads_task",
     "recipients",
+    "recent_contributions",
 ]

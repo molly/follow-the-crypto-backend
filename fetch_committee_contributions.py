@@ -39,24 +39,26 @@ def get_ids_to_omit(contribs):
 
 def should_omit(contrib, other_contribs, ids_to_omit):
     """Omit any duplicate contributions, refunds, etc."""
-    if contrib["line_number"] in ["15", "16"]:
-        return True
-    if contrib["line_number"] == "17":
-        if "receipt_type_full" not in contrib:
-            print(f"{contrib["contribution_receipt_date"]} - {contrib["contributor_name"]}: {contrib["contribution_receipt_amount"]} to {contrib["committee"]["name"]}. {contrib["pdf_url"]}")
-            if contrib.get("transaction_id", "") == "SA17.5207":
-                return False
-            return True
-        else:
-            receipt_type_full = contrib.get("receipt_type_full", "") or ""
-            if "CONTRIBUTION" in receipt_type_full.upper():
-                return False
-        return True
     if contrib["transaction_id"] in ids_to_omit:
         # Manually excluded transaction, or a parent of a more granularly reported transaction
         return True
     if contrib["transaction_id"] in other_contribs:
         # Duplicate of a transaction we've already encountered
+        return True
+    if contrib["line_number"] in ["15", "16"]:
+        return True
+    if contrib["line_number"] == "17":
+        if "receipt_type_full" not in contrib:
+            if contrib.get("transaction_id", "") == "SA17.5207":
+                print(f"{contrib["contribution_receipt_date"]} - {contrib["contributor_name"]}: {contrib["contribution_receipt_amount"]} to {contrib["committee"]["name"]}. {contrib["pdf_url"]}")
+                print(contrib.get("transaction_id"))
+                return False
+        else:
+            receipt_type_full = (contrib.get("receipt_type_full", "") or "").upper()
+            if "CONTRIBUTION" in receipt_type_full and "INTEREST" not in receipt_type_full:
+                print(f"{contrib["contribution_receipt_date"]} - {contrib["contributor_name"]}: {contrib["contribution_receipt_amount"]} to {contrib["committee"]["name"]}. {contrib["pdf_url"]}")
+                print(receipt_type_full)
+                return False
         return True
     if (
         "ATTRIBUTION" in (contrib.get("memo_text", "") or "").upper()

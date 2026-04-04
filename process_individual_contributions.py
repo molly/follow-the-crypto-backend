@@ -360,6 +360,10 @@ def process_individual_contributions(db, session):
 
     # Summarize spending by party
     # Sadly can't do this in the first loop because it relies on data from get_missing_recipient_data
+    all_individuals_by_individual = {}
+    all_individuals_by_party = {}
+    all_individuals_total = 0
+
     for doc in db.client.collection("individuals").stream():
         ind_id, ind = doc.id, doc.to_dict()
         contributions = ind["contributions"]
@@ -390,5 +394,24 @@ def process_individual_contributions(db, session):
         db.client.collection("individuals").document(ind_id).set(
             {"party_summary": party_summary}, merge=True
         )
+
+        individual_total = sum(party_summary.values())
+        all_individuals_by_individual[ind_id] = {
+            "total": round(individual_total, 2),
+            "by_party": {k: round(v, 2) for k, v in party_summary.items()},
+        }
+        all_individuals_total += individual_total
+        for party, amount in party_summary.items():
+            if party not in all_individuals_by_party:
+                all_individuals_by_party[party] = 0
+            all_individuals_by_party[party] += amount
+
+    db.client.collection("totals").document("individuals").set(
+        {
+            "total": round(all_individuals_total, 2),
+            "by_party": {k: round(v, 2) for k, v in all_individuals_by_party.items()},
+            "by_individual": all_individuals_by_individual,
+        }
+    )
 
     return new_recipients

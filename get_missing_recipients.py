@@ -191,15 +191,22 @@ def get_missing_recipient_data(recipients, db, session):
     # Backfill race_link for candidates already in candidate_details but missing it.
     # This handles cases where a committee was first processed before the candidate
     # appeared in raceDetails (e.g. they hadn't yet declared for this cycle).
+    # Also clears any stale race_link values for non-congressional candidates (e.g.
+    # presidential candidates who were incorrectly assigned a race_link in a prior
+    # version of this script).
     cached_race_docs = {}
     for recipient_id in recipients.keys():
         for candidate_id, details in recipients[recipient_id].get(
             "candidate_details", {}
         ).items():
-            if not details or "race_link" in details:
+            if not details:
+                continue
+            office = details.get("office")
+            if office not in {"S", "H"} and "race_link" in details:
+                del details["race_link"]
+            if "race_link" in details:
                 continue
             state = details.get("state")
-            office = details.get("office")
             if not state or not office or office not in {"S", "H"}:
                 continue
             if state not in cached_race_docs:
