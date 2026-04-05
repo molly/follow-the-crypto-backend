@@ -45,6 +45,7 @@ PICKED_FIELDS = [
     "entity_type",
     "contributor_aggregate_ytd",
     "memo_text",
+    "memo_code",
     "receipt_type",
 ]
 

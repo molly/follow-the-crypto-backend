@@ -1,4 +1,5 @@
 from get_missing_recipients import get_missing_recipient_data
+from process_individual_contributions import handle_memo_items
 from recipient_utils import get_all_recipients, set_all_recipients
 from utils import pick, compare_names_lastfirst
 
@@ -94,8 +95,24 @@ def process_company_contributions(db, session):
         company_id, company = doc.id, doc.to_dict()
         contributions = company["contributions"]
 
-        grouped_by_recipient = {}
+        # Group by (contributor, date) and apply memo item handling to avoid
+        # double-counting pass-through contributions (e.g. via JFCs).
+        grouped_by_contributor_date = {}
         for contrib in contributions:
+            key = (contrib.get("contributor_name", ""), contrib["contribution_receipt_date"])
+            if key not in grouped_by_contributor_date:
+                grouped_by_contributor_date[key] = []
+            grouped_by_contributor_date[key].append(contrib)
+
+        deduped_contributions = []
+        for group in grouped_by_contributor_date.values():
+            if any(c.get("memo_code") for c in group):
+                deduped_contributions.extend(handle_memo_items(group))
+            else:
+                deduped_contributions.extend(group)
+
+        grouped_by_recipient = {}
+        for contrib in deduped_contributions:
             recipient = contrib["committee_id"]
             if recipient not in all_recipients:
                 new_recipients.add(recipient)
@@ -338,6 +355,18 @@ def process_company_contributions(db, session):
                     reviewed_total += amount
             group_data["total"] = round(reviewed_total, 2)
 
+        recipient_embed_keys = [
+            "committee_id",
+            "committee_name",
+            "link",
+            "description",
+            "designation_full",
+            "party",
+            "candidate_ids",
+            "sponsor_candidate_ids",
+            "candidate_details",
+        ]
+
         party_summary = {}
         for committee_id, group_data in contributions.items():
             party = "UNK"
@@ -357,6 +386,8 @@ def process_company_contributions(db, session):
                     ]
                     if len(set(parties)) == 1 and not parties[0].startswith("N"):
                         party = parties[0]
+                recipient_data = {k: committee[k] for k in recipient_embed_keys if k in committee}
+                group_data["recipient"] = recipient_data
             if party not in party_summary:
                 party_summary[party] = 0
             party_summary[party] += group_data["total"]

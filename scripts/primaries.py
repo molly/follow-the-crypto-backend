@@ -1,5 +1,6 @@
 import csv
 from datetime import date, timedelta
+from race_utils import get_races_for_state
 
 
 def primaries(db):
@@ -29,9 +30,7 @@ def primaries(db):
 
         if primary_support > 0 or primary_oppose > 0:
             primary_happened = None
-            race_details = (
-                db.client.collection("raceDetails").document(state).get().to_dict()
-            )
+            race_details = get_races_for_state(db.client, state)
             race = race_details[candidate_data["race"]]
             for subrace in race["races"]:
                 subrace_type = subrace.get("type", None)

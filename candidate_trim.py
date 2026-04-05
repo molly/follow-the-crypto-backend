@@ -1,4 +1,5 @@
 import statistics
+from race_utils import get_all_races, save_races_for_state
 
 
 def is_below_median(candidate_summary, median_raised):
@@ -79,10 +80,9 @@ def find_index_to_slice(candidate_list, candidate_data):
 
 
 def trim_candidates(db):
-    race_docs = db.client.collection("raceDetails").stream()
-    for doc in race_docs:
+    all_race_data = get_all_races(db.client)
+    for state, state_data in all_race_data.items():
         modified_state = False
-        state, state_data = doc.id, doc.to_dict()
 
         for race_id, race_data in state_data.items():
             modified_race = False
@@ -130,4 +130,4 @@ def trim_candidates(db):
                         del state_data[race_id]["candidates"][candidate]
 
         if modified_state:
-            db.client.collection("raceDetails").document(state).set(state_data)
+            save_races_for_state(db.client, state, state_data)

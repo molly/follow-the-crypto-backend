@@ -35,11 +35,9 @@ def _merge_candidate(existing, new_entry, race_id):
 
 
 def update_candidates_expenditures(db):
+    from race_utils import get_all_races
     candidates = {}
-    race_details = db.client.collection("raceDetails").stream()
-    docs = [state for state in race_details]
-    for state in docs:
-        state, state_data = state.id, state.to_dict()
+    for state, state_data in get_all_races(db.client).items():
         if state == "US":
             continue
         for race_id, race in state_data.items():

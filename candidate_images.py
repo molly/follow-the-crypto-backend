@@ -1,5 +1,6 @@
 from Storage import Storage
 from utils import get_first_last_name
+from race_utils import get_all_races
 
 
 to_skip = {
@@ -43,9 +44,7 @@ to_skip = {
 def get_candidates_without_images(db):
     missing = []
     storage = Storage()
-    race_docs = db.client.collection("raceDetails").stream()
-    for doc in race_docs:
-        state, state_data = doc.id, doc.to_dict()
+    for state, state_data in get_all_races(db.client).items():
         for race_id, race_data in state_data.items():
             for candidate in race_data["candidates"].values():
                 if candidate["common_name"] in to_skip:

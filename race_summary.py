@@ -4,6 +4,7 @@ import re
 from utils import FEC_fetch, compare_names, get_expenditure_race_type
 from states import SINGLE_MEMBER_STATES
 from unidecode import unidecode
+from race_utils import get_all_races, update_race
 
 RACE_PRIORITY = {
     "general": 0,
@@ -64,8 +65,7 @@ def get_last_index_with_donation(sorted_candidates, candidates_data):
 
 
 def summarize_races(db, session):
-    race_docs_stream = db.client.collection("raceDetails").stream()
-    race_docs = [doc for doc in race_docs_stream]
+    all_race_data = get_all_races(db.client)
     all_expenditures = (
         db.client.collection("expenditures").document("all").get().to_dict()
     )
@@ -78,8 +78,7 @@ def summarize_races(db, session):
         .get()
         .to_dict()
     )
-    for doc in race_docs:
-        state, state_data = doc.id, doc.to_dict()
+    for state, state_data in all_race_data.items():
         races_expenditures = states_expenditures.get(state, {}).get("by_race", {})
         # Iterate through each race in each state
         for race_id, race_data in state_data.items():
@@ -536,4 +535,4 @@ def summarize_races(db, session):
                 updated_data[db.client.field_path(race_id, "races")] = race_data[
                     "races"
                 ]
-            db.client.collection("raceDetails").document(state).update(updated_data)
+            update_race(db.client, state, race_id, updated_data)

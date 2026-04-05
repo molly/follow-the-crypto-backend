@@ -141,6 +141,7 @@ def summarize_recipients(db):
                                 "designation_full",
                                 "committee_name",
                                 "committee_id",
+                                "party",
                             ],
                         )
                     if beneficiary[0] != "C":
@@ -247,6 +248,7 @@ def summarize_recipients(db):
                                 "designation_full",
                                 "committee_name",
                                 "committee_id",
+                                "party",
                             ],
                         )
                     if beneficiary[0] != "C":
@@ -338,5 +340,21 @@ def summarize_recipients(db):
         {
             "order": order,
             "candidatesWithoutExpendituresOrder": candidates_without_expenditures,
+        }
+    )
+
+    # Precompute Trump-affiliated committee IDs and names so pages don't need to
+    # scan all recipients at render time.
+    trump_candidate_id = "P80001571"
+    trump_committee_names = {}
+    for committee_id, data in all_recipient_committees.items():
+        candidate_ids = data.get("candidate_ids") or []
+        sponsor_ids = data.get("sponsor_candidate_ids") or []
+        if trump_candidate_id in candidate_ids or trump_candidate_id in sponsor_ids:
+            trump_committee_names[committee_id] = data.get("committee_name")
+    db.client.collection("constants").document("trumpCommittees").set(
+        {
+            "ids": list(trump_committee_names.keys()),
+            "names": trump_committee_names,
         }
     )

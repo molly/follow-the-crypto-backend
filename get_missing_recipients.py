@@ -1,6 +1,7 @@
 import logging
 from states import SINGLE_MEMBER_STATES
 from utils import chunk, FEC_fetch, pick
+from race_utils import get_races_for_state
 
 
 def race_has_candidate(race, candidate_id):
@@ -99,10 +100,7 @@ def get_missing_recipient_data(recipients, db, session):
             # election_years that don't include 2026 yet. If we can confirm they
             # appear in a regular (non-special) tracked race we mark them as
             # running this cycle regardless.
-            race_doc = (
-                db.client.collection("raceDetails").document(candidate["state"]).get()
-            )
-            race_data = race_doc.to_dict() if race_doc.exists else None
+            race_data = get_races_for_state(db.client, candidate["state"]) or None
             in_regular_race = False
             if race_data:
                 if candidate["office"] == "S":
@@ -210,12 +208,7 @@ def get_missing_recipient_data(recipients, db, session):
             if not state or not office or office not in {"S", "H"}:
                 continue
             if state not in cached_race_docs:
-                race_doc = (
-                    db.client.collection("raceDetails").document(state).get()
-                )
-                cached_race_docs[state] = (
-                    race_doc.to_dict() if race_doc.exists else None
-                )
+                cached_race_docs[state] = get_races_for_state(db.client, state) or None
             race_data = cached_race_docs[state]
             if not race_data:
                 continue

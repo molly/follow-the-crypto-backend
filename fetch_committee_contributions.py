@@ -1,5 +1,10 @@
+from collections import defaultdict
 from utils import FEC_fetch, pick
 import re
+
+# Contributions below this amount (per transaction) will be aggregated by contributor
+# to keep rawContributions documents under Firestore's 1MB limit.
+PRE_AGGREGATE_THRESHOLD = 1000
 
 CONTRIBUTION_FIELDS = [
     "contributor_first_name",
@@ -19,6 +24,50 @@ CONTRIBUTION_FIELDS = [
     "receipt_type_full",
     "transaction_id",
 ]
+
+
+def pre_aggregate_small_contributions(contributions):
+    """
+    Contributions below PRE_AGGREGATE_THRESHOLD are grouped by employer (or contributor_name
+    if no employer) and stored as a single aggregate record per group. This keeps rawContributions
+    documents under Firestore's 1MB limit for large PACs with many small employee contributions.
+
+    Contributions >= PRE_AGGREGATE_THRESHOLD are kept as individual records.
+    """
+    large = [c for c in contributions if c["contribution_receipt_amount"] >= PRE_AGGREGATE_THRESHOLD]
+    small = [c for c in contributions if c["contribution_receipt_amount"] < PRE_AGGREGATE_THRESHOLD]
+
+    by_group = defaultdict(list)
+    for contrib in small:
+        employer = (contrib.get("contributor_employer") or "").strip().upper()
+        if not employer or employer == "N/A":
+            employer = (contrib.get("contributor_name") or "UNKNOWN").strip().upper()
+        by_group[employer].append(contrib)
+
+    aggregated = []
+    for group_name, contribs in by_group.items():
+        most_recent_date = max(
+            (c.get("contribution_receipt_date") or "" for c in contribs), default=""
+        )
+        # Use the most common line_number to preserve transfer-vs-contribution classification
+        line_numbers = [c.get("line_number") for c in contribs if c.get("line_number")]
+        line_number = max(set(line_numbers), key=line_numbers.count) if line_numbers else None
+
+        aggregated.append({
+            "contributor_name": group_name,
+            "contributor_employer": group_name,
+            "entity_type": "ORG",
+            "contribution_receipt_amount": round(
+                sum(c["contribution_receipt_amount"] for c in contribs), 2
+            ),
+            "contribution_receipt_date": most_recent_date,
+            "line_number": line_number,
+            "transaction_id": f"empgroup_{group_name}",
+            "pre_aggregated": True,
+            "pre_aggregated_count": len(contribs),
+        })
+
+    return large + aggregated
 
 
 def get_ids_to_omit(contribs):
@@ -174,7 +223,13 @@ def update_committee_contributions(db, session):
             else:
                 page += 1
 
-        # Diff with previously stored transactions and store any new transactions
+        # Pre-aggregate small contributions before storing to stay under Firestore's 1MB limit.
+        # Keep the original contributions list for diff lookups below.
+        contributions_for_storage = pre_aggregate_small_contributions(contributions)
+
+        # Diff with previously stored transactions and store any new transactions.
+        # Use known_transaction_ids (stored alongside the doc) so that real transaction
+        # IDs are preserved even after small contributions are folded into agg_ records.
         old = (
             db.client.collection("rawContributions")
             .document(committee_id)
@@ -182,14 +237,22 @@ def update_committee_contributions(db, session):
             .to_dict()
         )
         if old:
-            old_ids = set([x["transaction_id"] for x in old["transactions"]])
-            diff_ids = contrib_ids.difference(old_ids)
+            old_known_ids = set(
+                old.get(
+                    "known_transaction_ids",
+                    [x["transaction_id"] for x in old["transactions"]],
+                )
+            )
+            diff_ids = contrib_ids.difference(old_known_ids)
             if diff_ids:
                 for diff_id in diff_ids:
                     new_contributions[diff_id] = next(
                         x for x in contributions if x["transaction_id"] == diff_id
                     )
         db.client.collection("rawContributions").document(committee_id).set(
-            {"transactions": contributions}
+            {
+                "transactions": contributions_for_storage,
+                "known_transaction_ids": list(contrib_ids),
+            }
         )
     return new_contributions

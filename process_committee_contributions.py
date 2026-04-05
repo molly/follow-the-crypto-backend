@@ -229,75 +229,89 @@ def process_contribution(contrib, db, donorMap):
             2,
         )
 
-    if contrib["contribution_receipt_amount"] >= ROLLUP_THRESHOLD:
+    # Normalize the rollup key to handle variations across filings:
+    # - Middle names/initials lumped into first name ("RAVI" vs "RAVI PRAKASH")
+    # - Trailing whitespace in name fields
+    # Use only the first word of first_name + last_name, matching the approach
+    # in process_company_contributions.py
+    last_name = (contrib.get("contributor_last_name") or "").strip().upper()
+    first_name = (contrib.get("contributor_first_name") or "").strip().upper()
+    if last_name and last_name != "N/A" and first_name and first_name != "N/A":
+        first_name = first_name.split()[0]
+        rollup_name = f"{last_name}, {first_name}"
+    else:
+        rollup_name = (contrib.get("contributor_name") or "UNKNOWN").strip().upper()
+        if ", " in rollup_name:
+            parts = rollup_name.split(", ", 1)
+            if len(parts) == 2:
+                first_parts = parts[1].split()
+                if first_parts:
+                    rollup_name = f"{parts[0]}, {first_parts[0]}"
+
+    if not contrib.get("pre_aggregated") and contrib["contribution_receipt_amount"] >= ROLLUP_THRESHOLD:
         # Record the individual contribution if it's large
         donorMap["groups"][group]["contributions"].append(redact_contribution(contrib))
     else:
         # Add the contribution to a rollup.
         # Note we don't redact here, that happens later
 
-        # Normalize the rollup key to handle variations across filings:
-        # - Middle names/initials lumped into first name ("RAVI" vs "RAVI PRAKASH")
-        # - Trailing whitespace in name fields
-        # Use only the first word of first_name + last_name, matching the approach
-        # in process_company_contributions.py
-        last_name = (contrib.get("contributor_last_name") or "").strip().upper()
-        first_name = (contrib.get("contributor_first_name") or "").strip().upper()
-        if last_name and last_name != "N/A" and first_name and first_name != "N/A":
-            first_name = first_name.split()[0]
-            rollup_name = f"{last_name}, {first_name}"
+        if contrib.get("pre_aggregated"):
+            # Already aggregated at fetch time — initialize the rollup directly
+            # with the stored count and total rather than accumulating.
+            if rollup_name not in donorMap["groups"][group]["rollup"]:
+                donorMap["groups"][group]["rollup"][rollup_name] = {
+                    **contrib,
+                    "oldest": contrib["contribution_receipt_date"],
+                    "newest": contrib["contribution_receipt_date"],
+                    "total": contrib["pre_aggregated_count"],
+                    "total_receipt_amount": round(
+                        contrib["contribution_receipt_amount"], 2
+                    ),
+                }
         else:
-            rollup_name = (contrib.get("contributor_name") or "UNKNOWN").strip().upper()
-            if ", " in rollup_name:
-                parts = rollup_name.split(", ", 1)
-                if len(parts) == 2:
-                    first_parts = parts[1].split()
-                    if first_parts:
-                        rollup_name = f"{parts[0]}, {first_parts[0]}"
+            if rollup_name not in donorMap["groups"][group]["rollup"]:
+                # Initialize the rollup group
+                donorMap["groups"][group]["rollup"][rollup_name] = {
+                    **contrib,
+                    "oldest": contrib["contribution_receipt_date"],
+                    "newest": contrib["contribution_receipt_date"],
+                    "total": 1,
+                    "total_receipt_amount": round(
+                        contrib["contribution_receipt_amount"], 2
+                    ),
+                }
+            else:
+                donorMap["groups"][group]["rollup"][rollup_name]["total"] += 1
+                donorMap["groups"][group]["rollup"][rollup_name][
+                    "total_receipt_amount"
+                ] += round(contrib["contribution_receipt_amount"], 2)
 
-        if rollup_name not in donorMap["groups"][group]["rollup"]:
-            # Initialize the rollup group
-            donorMap["groups"][group]["rollup"][rollup_name] = {
-                **contrib,
-                "oldest": contrib["contribution_receipt_date"],
-                "newest": contrib["contribution_receipt_date"],
-                "total": 1,
-                "total_receipt_amount": round(
-                    contrib["contribution_receipt_amount"], 2
-                ),
-            }
-        else:
-            donorMap["groups"][group]["rollup"][rollup_name]["total"] += 1
-            donorMap["groups"][group]["rollup"][rollup_name][
-                "total_receipt_amount"
-            ] += round(contrib["contribution_receipt_amount"], 2)
-
-            # Set newest/oldest dates
-            if (
-                contrib["contribution_receipt_date"]
-                < donorMap["groups"][group]["rollup"][rollup_name]["oldest"]
-            ):
-                donorMap["groups"][group]["rollup"][rollup_name]["oldest"] = contrib[
-                    "contribution_receipt_date"
-                ]
-            if (
-                contrib["contribution_receipt_date"]
-                > donorMap["groups"][group]["rollup"][rollup_name]["newest"]
-            ):
-                donorMap["groups"][group]["rollup"][rollup_name]["newest"] = contrib[
-                    "contribution_receipt_date"
-                ]
-
-            # Update the aggregate YTD contribution if this is a new high
-            if "contributor_aggregate_ytd" in contrib:
-                current_aggregate = contrib["contributor_aggregate_ytd"] or 0
-                rollup_entry = donorMap["groups"][group]["rollup"][rollup_name]
-                existing_aggregate = rollup_entry.get("contributor_aggregate_ytd") or 0
-
-                if current_aggregate > existing_aggregate:
-                    rollup_entry["contributor_aggregate_ytd"] = contrib[
-                        "contributor_aggregate_ytd"
+                # Set newest/oldest dates
+                if (
+                    contrib["contribution_receipt_date"]
+                    < donorMap["groups"][group]["rollup"][rollup_name]["oldest"]
+                ):
+                    donorMap["groups"][group]["rollup"][rollup_name]["oldest"] = contrib[
+                        "contribution_receipt_date"
                     ]
+                if (
+                    contrib["contribution_receipt_date"]
+                    > donorMap["groups"][group]["rollup"][rollup_name]["newest"]
+                ):
+                    donorMap["groups"][group]["rollup"][rollup_name]["newest"] = contrib[
+                        "contribution_receipt_date"
+                    ]
+
+                # Update the aggregate YTD contribution if this is a new high
+                if "contributor_aggregate_ytd" in contrib:
+                    current_aggregate = contrib["contributor_aggregate_ytd"] or 0
+                    rollup_entry = donorMap["groups"][group]["rollup"][rollup_name]
+                    existing_aggregate = rollup_entry.get("contributor_aggregate_ytd") or 0
+
+                    if current_aggregate > existing_aggregate:
+                        rollup_entry["contributor_aggregate_ytd"] = contrib[
+                            "contributor_aggregate_ytd"
+                        ]
 
     # Update the total contributions count and amount for the group, regardless of whether this is going in
     # a rollup
@@ -305,7 +319,7 @@ def process_contribution(contrib, db, donorMap):
         donorMap["groups"][group]["total"] + contrib["contribution_receipt_amount"],
         2,
     )
-    donorMap["contributions_count"] += 1
+    donorMap["contributions_count"] += contrib.get("pre_aggregated_count", 1)
     return contrib
 
 

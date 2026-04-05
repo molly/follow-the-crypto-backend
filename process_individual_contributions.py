@@ -118,6 +118,31 @@ def attribute_earmarked(contrib):
     return contrib
 
 
+def handle_memo_items(group):
+    # Memo items (memo_code="X") are not additive contributions — they record where
+    # a pass-through contribution (e.g. via a JFC) was ultimately directed and should
+    # not be counted separately. If memo items fully account for the non-memo total,
+    # replace the non-memo contributions with the attributed memo items. Otherwise,
+    # strip memo items to avoid double-counting.
+    memo_items = [c for c in group if c.get("memo_code")]
+    non_memo = [c for c in group if not c.get("memo_code")]
+
+    if not non_memo:
+        # Only memo items — treat them as the real contributions
+        return [attribute_earmarked(c) for c in memo_items]
+
+    memo_sum = sum(c["contribution_receipt_amount"] for c in memo_items)
+    non_memo_sum = sum(c["contribution_receipt_amount"] for c in non_memo)
+
+    if memo_sum == non_memo_sum:
+        # Memo items fully account for the non-memo contributions.
+        # Use memo items as the properly attributed contributions.
+        return [attribute_earmarked(c) for c in memo_items]
+
+    # Can't reconcile amounts — drop memo items to avoid double-counting.
+    return non_memo
+
+
 def dedupe_by_ids(group):
     grouped_by_transaction_id = {}
     for contrib in group:
@@ -175,6 +200,8 @@ def process_contribution_group(group):
     group = dedupe_by_ids(group)
     if len(group) == 1:
         return [attribute_earmarked(group[0])]
+    if any(c.get("memo_code") for c in group):
+        return handle_memo_items(group)
     contrib_24t = []
     contrib_15 = []
     contrib_15e = []
@@ -356,16 +383,29 @@ def process_individual_contributions(db, session):
     recipients = get_missing_recipient_data(all_recipients, db, session)
     set_all_recipients(db, recipients)
 
-    # Summarize spending by party
+    # Summarize spending by party and embed recipient display data into each contribution group.
     # Sadly can't do this in the first loop because it relies on data from get_missing_recipient_data
     all_individuals_by_individual = {}
     all_individuals_by_party = {}
     all_individuals_total = 0
 
+    recipient_embed_keys = [
+        "committee_id",
+        "committee_name",
+        "link",
+        "description",
+        "designation_full",
+        "party",
+        "candidate_ids",
+        "sponsor_candidate_ids",
+        "candidate_details",
+    ]
+
     for doc in db.client.collection("individuals").stream():
         ind_id, ind = doc.id, doc.to_dict()
         contributions = ind["contributions"]
         party_summary = {}
+        enriched_contributions = []
         for group_data in contributions:
             committee_id = group_data.get("committee_id", None)
             party = "UNK"
@@ -385,12 +425,16 @@ def process_individual_contributions(db, session):
                     ]
                     if len(set(parties)) == 1 and not parties[0].startswith("N"):
                         party = parties[0]
+                recipient_data = {k: committee[k] for k in recipient_embed_keys if k in committee}
+                enriched_contributions.append({**group_data, "recipient": recipient_data})
+            else:
+                enriched_contributions.append(group_data)
             if party not in party_summary:
                 party_summary[party] = 0
             party_summary[party] += group_data["total"]
 
         db.client.collection("individuals").document(ind_id).set(
-            {"party_summary": party_summary}, merge=True
+            {"party_summary": party_summary, "contributions": enriched_contributions}, merge=True
         )
 
         individual_total = sum(party_summary.values())

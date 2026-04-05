@@ -1,5 +1,6 @@
 import logging
 from utils import FEC_fetch, pick, get_expenditure_race_type
+from race_utils import get_all_races, save_races_for_state
 
 SCHEDULE_E_FIELDS = [
     "expenditure_amount",
@@ -23,10 +24,8 @@ def split_into_chunks(array):
 
 def update_candidate_outside_spending(db, session):
     try:
-        race_docs = db.client.collection("raceDetails").stream()
-        docs = [doc for doc in race_docs]
-        for doc in docs:
-            state, state_data = doc.id, doc.to_dict()
+        all_race_data = get_all_races(db.client)
+        for state, state_data in all_race_data.items():
             if state == "US":
                 continue
             for race_id, race_data in state_data.items():
@@ -288,7 +287,7 @@ def update_candidate_outside_spending(db, session):
                     state_data[race_id]["candidates"][candidate_name][
                         "outside_spending"
                     ] = candidate_spending
-            db.client.collection("raceDetails").document(state).set(state_data)
+            save_races_for_state(db.client, state, state_data)
     except Exception as e:
         logging.error(f"Error updating outside spending: {e}")
         print(f"Error updating outside spending: {e}")

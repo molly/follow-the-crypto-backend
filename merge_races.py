@@ -8,6 +8,7 @@ when saving to Firestore.
 from typing import List, Dict, Any, Optional
 import logging
 import time
+from race_utils import get_races_for_state, save_races_for_state
 
 
 def merge_manual_into_scraped(
@@ -113,11 +114,8 @@ def save_scraped_races(db_client, state: str, race_data: Dict[str, Any]) -> None
             }
         )
     """
-    doc_ref = db_client.collection('raceDetails').document(state)
-
     # Fetch existing data to preserve manualRaces and races fields
-    doc = doc_ref.get()
-    existing_data = doc.to_dict() if doc.exists else {}
+    existing_data = get_races_for_state(db_client, state)
 
     # Get current timestamp in milliseconds
     current_timestamp = int(time.time() * 1000)
@@ -165,6 +163,6 @@ def save_scraped_races(db_client, state: str, race_data: Dict[str, Any]) -> None
             f"{state}/{race_id}: Saved {len(scraped_races)} scraped races"
         )
 
-    # Write back to Firestore
-    doc_ref.set(race_data)
+    # Write back to Firestore (sharded)
+    save_races_for_state(db_client, state, race_data)
     logging.info(f"Saved scraped race details for {state} with {len(race_data)} race groups")
