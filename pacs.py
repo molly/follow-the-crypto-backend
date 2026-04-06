@@ -18,7 +18,8 @@ def get_pac_data(pac, db):
     pac_data = pick(pac, FIELDS)
     if pac_data["committee_id"] in db.all_committees:
         pac_data["description"] = db.all_committees[pac_data["committee_id"]]
-    pac_data["is_crypto"] = pac_data["committee_id"] in db.committees.keys()
+    pac_data["is_tracked"] = pac_data["committee_id"] in db.committees.keys()
+    pac_data["sector"] = db.committees[pac_data["committee_id"]]["sector"] if pac_data["is_tracked"] else None
     return pac_data
 
 

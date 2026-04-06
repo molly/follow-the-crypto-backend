@@ -5,43 +5,41 @@ def process_recent_contributions(db):
     direct (non-individual-attributed) contributions from each company document,
     then writes the top 50 most recent to contributions/recent.
     """
-    recipients_doc = (
-        db.client.collection("allRecipients").document("recipients").get()
-    )
-    all_recipients = recipients_doc.to_dict() if recipients_doc.exists else {}
     all_committees = db.all_committees or {}
 
     all_contributions = []
 
-    # Build a map of individual_id -> [company_id, ...] from the companies constant
-    individual_to_company_ids = {}
-    for company_id, company in (db.companies or {}).items():
-        for ind in company.get("relatedIndividuals", []):
-            ind_id = ind.get("id")
-            if ind_id:
-                if ind_id not in individual_to_company_ids:
-                    individual_to_company_ids[ind_id] = []
-                individual_to_company_ids[ind_id].append(company_id)
+    # Build a map of company name -> company_id from the companies constant
+    company_name_to_id = {
+        company.get("name"): company_id
+        for company_id, company in (db.companies or {}).items()
+        if company.get("name")
+    }
 
     non_candidate_committees = db.non_candidate_committees or set()
 
-    def get_committee_info(committee_id):
-        committee_name = None
-        committee_description = None
-        candidate_ids = None
-        candidate_details = None
-        if committee_id and committee_id in all_recipients:
-            recipient = all_recipients[committee_id]
-            committee_name = recipient.get("committee_name")
-            if committee_id not in non_candidate_committees:
-                candidate_ids = (
-                    recipient.get("candidate_ids")
-                    or recipient.get("sponsor_candidate_ids")
-                )
-                candidate_details = recipient.get("candidate_details")
+    def get_committee_info(recipient):
+        """Extract display info from an embedded recipient dict."""
+        if not recipient:
+            return None, None, None, None, None
+        committee_name = recipient.get("committee_name")
+        committee_description = recipient.get("description")
+        candidate_details = recipient.get("candidate_details")
+        committee_id = recipient.get("committee_id")
+
         if committee_id and committee_id in all_committees:
             committee_description = all_committees[committee_id]
-        return committee_name, committee_description, candidate_ids, candidate_details
+
+        candidate_ids = None
+        sponsor_candidate_ids = None
+        if committee_id and committee_id not in non_candidate_committees:
+            candidate_ids = recipient.get("candidate_ids")
+        if not candidate_ids:
+            sponsor_ids = recipient.get("sponsor_candidate_ids")
+            if sponsor_ids:
+                sponsor_candidate_ids = sponsor_ids
+
+        return committee_name, committee_description, candidate_ids, sponsor_candidate_ids, candidate_details
 
     # Collect contributions from tracked individuals
     for doc in db.client.collection("individuals").stream():
@@ -50,13 +48,21 @@ def process_recent_contributions(db):
         ind_constant = db.individuals.get(ind_id, {})
         source_name = ind_constant.get("name", ind_id)
 
+        # Build committee_id -> recipient lookup from the enriched contributions groups
+        recipient_by_committee = {}
+        for group in ind_data.get("contributions", []):
+            c_id = group.get("committee_id")
+            if c_id and "recipient" in group:
+                recipient_by_committee[c_id] = group["recipient"]
+
         contributions_by_date = ind_data.get("contributions_by_date", [])
         for contrib in contributions_by_date:
             manual_review = contrib.get("manualReview")
             if manual_review and manual_review.get("status") == "omit":
                 continue
             committee_id = contrib.get("committee_id")
-            committee_name, committee_description, candidate_ids, candidate_details = get_committee_info(committee_id)
+            recipient = recipient_by_committee.get(committee_id)
+            committee_name, committee_description, candidate_ids, sponsor_candidate_ids, candidate_details = get_committee_info(recipient)
             all_contributions.append(
                 {
                     **contrib,
@@ -64,10 +70,14 @@ def process_recent_contributions(db):
                     "source_name": source_name,
                     "source_type": "individual",
                     "source_company": ind_constant.get("company", []),
-                    "source_company_ids": individual_to_company_ids.get(ind_id, []),
+                    "source_company_ids": [
+                        company_name_to_id.get(name)
+                        for name in ind_constant.get("company", [])
+                    ],
                     "committee_name": committee_name,
                     "committee_description": committee_description,
                     "candidate_ids": candidate_ids,
+                    "sponsor_candidate_ids": sponsor_candidate_ids,
                     "candidate_details": candidate_details,
                 }
             )
@@ -82,7 +92,8 @@ def process_recent_contributions(db):
         contributions_groups = company_data.get("contributions", [])
         for group in contributions_groups:
             committee_id = group.get("committee_id")
-            committee_name, committee_description, candidate_ids, candidate_details = get_committee_info(committee_id)
+            recipient = group.get("recipient")
+            committee_name, committee_description, candidate_ids, sponsor_candidate_ids, candidate_details = get_committee_info(recipient)
             for contrib in group.get("contributions", []):
                 if contrib.get("isIndividual"):
                     continue
@@ -99,6 +110,7 @@ def process_recent_contributions(db):
                         "committee_name": committee_name,
                         "committee_description": committee_description,
                         "candidate_ids": candidate_ids,
+                        "sponsor_candidate_ids": sponsor_candidate_ids,
                         "candidate_details": candidate_details,
                     }
                 )
