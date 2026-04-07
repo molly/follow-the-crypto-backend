@@ -38,15 +38,23 @@ def process_expenditures(db):
     )
     states = {}
     new_opposition_spending = set()
+
+    def empty_parties():
+        return {
+            "dem_oppose": 0,
+            "dem_support": 0,
+            "rep_oppose": 0,
+            "rep_support": 0,
+            "oppose_benefit_dem": 0,
+            "oppose_benefit_rep": 0,
+            "oppose_benefit_mix": 0,
+            "oppose_benefit_unk": 0,
+        }
+
     all_parties = {
-        "dem_oppose": 0,
-        "dem_support": 0,
-        "rep_oppose": 0,
-        "rep_support": 0,
-        "oppose_benefit_dem": 0,
-        "oppose_benefit_rep": 0,
-        "oppose_benefit_mix": 0,  # Both parties benefit from opposing
-        "oppose_benefit_unk": 0,  # Unknown who benefits from opposing
+        "all": empty_parties(),
+        "crypto": empty_parties(),
+        "ai": empty_parties(),
     }
     committees = {}
     totals = {
@@ -124,28 +132,36 @@ def process_expenditures(db):
                 "oppose_benefit_mix": 0,
                 "oppose_benefit_unk": 0,
             }
+        committee_sector = db.committees.get(committee_id, {}).get("sector")
+        sector_keys = ["all"]
+        if committee_sector in all_parties:
+            sector_keys.append(committee_sector)
         if expenditure["support_oppose_indicator"] == "S":
             if expenditure["candidate_party"] == "DEM":
                 committees[committee_id]["dem_support"] += expenditure[
                     "expenditure_amount"
                 ]
-                all_parties["dem_support"] += expenditure["expenditure_amount"]
+                for key in sector_keys:
+                    all_parties[key]["dem_support"] += expenditure["expenditure_amount"]
             elif expenditure["candidate_party"] == "REP":
                 committees[committee_id]["rep_support"] += expenditure[
                     "expenditure_amount"
                 ]
-                all_parties["rep_support"] += expenditure["expenditure_amount"]
+                for key in sector_keys:
+                    all_parties[key]["rep_support"] += expenditure["expenditure_amount"]
         elif expenditure["support_oppose_indicator"] == "O":
             if expenditure["candidate_party"] == "DEM":
                 committees[committee_id]["dem_oppose"] += expenditure[
                     "expenditure_amount"
                 ]
-                all_parties["dem_oppose"] += expenditure["expenditure_amount"]
+                for key in sector_keys:
+                    all_parties[key]["dem_oppose"] += expenditure["expenditure_amount"]
             elif expenditure["candidate_party"] == "REP":
                 committees[committee_id]["rep_oppose"] += expenditure[
                     "expenditure_amount"
                 ]
-                all_parties["rep_oppose"] += expenditure["expenditure_amount"]
+                for key in sector_keys:
+                    all_parties[key]["rep_oppose"] += expenditure["expenditure_amount"]
             if expenditure["candidate_id"] in db.opposition_spending:
                 party = db.opposition_spending[expenditure["candidate_id"]][
                     "benefitsParty"
@@ -154,28 +170,34 @@ def process_expenditures(db):
                     committees[committee_id]["oppose_benefit_dem"] += expenditure[
                         "expenditure_amount"
                     ]
-                    all_parties["oppose_benefit_dem"] += expenditure[
-                        "expenditure_amount"
-                    ]
+                    for key in sector_keys:
+                        all_parties[key]["oppose_benefit_dem"] += expenditure[
+                            "expenditure_amount"
+                        ]
                 elif party == "REP":
                     committees[committee_id]["oppose_benefit_rep"] += expenditure[
                         "expenditure_amount"
                     ]
-                    all_parties["oppose_benefit_rep"] += expenditure[
-                        "expenditure_amount"
-                    ]
+                    for key in sector_keys:
+                        all_parties[key]["oppose_benefit_rep"] += expenditure[
+                            "expenditure_amount"
+                        ]
                 elif party == "MIX":
                     committees[committee_id]["oppose_benefit_mix"] += expenditure[
                         "expenditure_amount"
                     ]
-                    all_parties["oppose_benefit_mix"] += expenditure[
-                        "expenditure_amount"
-                    ]
+                    for key in sector_keys:
+                        all_parties[key]["oppose_benefit_mix"] += expenditure[
+                            "expenditure_amount"
+                        ]
             else:
                 committees[committee_id]["oppose_benefit_unk"] += expenditure[
                     "expenditure_amount"
                 ]
-                all_parties["oppose_benefit_unk"] += expenditure["expenditure_amount"]
+                for key in sector_keys:
+                    all_parties[key]["oppose_benefit_unk"] += expenditure[
+                        "expenditure_amount"
+                    ]
                 new_opposition_spending.add(expenditure["candidate_id"])
 
     db.client.collection("expenditures").document("states").set(states)

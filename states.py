@@ -45,6 +45,7 @@ STATES_BY_ABBR = {
     "TX": "Texas",
     "US": "United States",
     "UT": "Utah",
+    "VI": "United States Virgin Islands",
     "VT": "Vermont",
     "VA": "Virginia",
     "WA": "Washington",
@@ -100,6 +101,7 @@ STATES_BY_FULL = {
     "Texas": "TX",
     "United States": "US",
     "Utah": "UT",
+    "United States Virgin Islands": "VI",
     "Vermont": "VT",
     "Virginia": "VA",
     "Washington": "WA",
@@ -108,7 +110,13 @@ STATES_BY_FULL = {
     "Wyoming": "WY",
 }
 
-SINGLE_MEMBER_STATES = ["AK", "DE", "ND", "SD", "VT", "WY"]
+SINGLE_MEMBER_STATES = ["AK", "DE", "ND", "SD", "VT", "VI", "WY"]
+
+# Overrides for state names as they appear in Ballotpedia page titles,
+# for states where the Ballotpedia name differs from the standard full name.
+BALLOTPEDIA_STATE_NAMES = {
+    "VI": "the Virgin Islands",
+}
 
 # Known special elections for the current cycle.
 # Maps "{state}-{election_name}" to election year.

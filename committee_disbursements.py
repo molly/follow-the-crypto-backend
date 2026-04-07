@@ -12,7 +12,7 @@ DISBURSEMENT_FIELDS = [
 def update_committee_disbursements(db, session):
     committees = db.client.collection("committees").stream()
     new_disbursements = {}
-    total_receipts = 0
+    total_receipts = {"all": 0, "crypto": 0, "ai": 0}
     for committee_snapshot in committees:
         committee = committee_snapshot.to_dict()
         committee_id = committee["id"]
@@ -114,12 +114,18 @@ def update_committee_disbursements(db, session):
                 .to_dict()
             )
             if contributions:
-                total_receipts += (
+                net = (
                     contributions.get("total_contributed", 0)
                     + contributions.get("total_transferred", 0)
                     - disbursements_total
                 )
-    db.client.collection("totals").document("committees").set(
-        {"net_receipts": total_receipts}, merge=True
-    )
+                committee_sector = committee.get("sector")
+                total_receipts["all"] += net
+                if committee_sector in total_receipts:
+                    total_receipts[committee_sector] += net
+    db.client.collection("totals").document("committees").update({
+        "all.net_receipts": total_receipts["all"],
+        "crypto.net_receipts": total_receipts["crypto"],
+        "ai.net_receipts": total_receipts["ai"],
+    })
     return new_disbursements

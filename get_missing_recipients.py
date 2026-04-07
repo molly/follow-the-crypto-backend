@@ -47,10 +47,19 @@ def get_missing_recipient_data(recipients, db, session):
             del recipients[recipient_id]["needs_data"]
         if recipient_id in db.committee_affiliations:
             try:
+                affiliation = db.committee_affiliations.get(recipient_id, {})
                 recipients[recipient_id] = {
                     **recipients.get(recipient_id, {}),
-                    **db.committee_affiliations.get(recipient_id, {}),
+                    **affiliation,
                 }
+                # If the affiliation explicitly uses sponsor_candidate_ids (not
+                # candidate_ids), remove any stale candidate_ids that may have
+                # persisted from a prior affiliation or from the FEC API response.
+                if (
+                    "sponsor_candidate_ids" in affiliation
+                    and "candidate_ids" not in affiliation
+                ):
+                    recipients[recipient_id].pop("candidate_ids", None)
             except Exception as e:
                 logging.error(
                     "Malformed committee affiliation", {"recipient_id": recipient_id}

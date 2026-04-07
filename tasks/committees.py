@@ -12,12 +12,19 @@ def hydrate_committees(context):
     db = context.db
     session = context.session
 
+    def empty_totals():
+        return {
+            "receipts": 0,
+            "expenditures": 0,
+            "disbursements": 0,
+            "cash_on_hand": 0,
+            "claimed_committed": 0,
+        }
+
     combined_committee_totals = {
-        "receipts": 0,
-        "expenditures": 0,
-        "disbursements": 0,
-        "cash_on_hand": 0,
-        "claimed_committed": 0,
+        "all": empty_totals(),
+        "crypto": empty_totals(),
+        "ai": empty_totals(),
     }
     committees_processed = 0
 
@@ -82,11 +89,16 @@ def hydrate_committees(context):
                         ],
                     ),
                 )
-                combined_committee_totals["receipts"] += totals["receipts"]
-                combined_committee_totals["expenditures"] += totals[
-                    "independent_expenditures"
-                ]
-                combined_committee_totals["disbursements"] += totals["disbursements"]
+                sector_keys = ["all"]
+                committee_sector = committee.get("sector")
+                if committee_sector in combined_committee_totals:
+                    sector_keys.append(committee_sector)
+                for key in sector_keys:
+                    combined_committee_totals[key]["receipts"] += totals["receipts"]
+                    combined_committee_totals[key]["expenditures"] += totals[
+                        "independent_expenditures"
+                    ]
+                    combined_committee_totals[key]["disbursements"] += totals["disbursements"]
 
             # Fetch cash on hand from the 2024 cycle to get EOY 2024 balance,
             # avoiding double-counting 2025 contributions.
@@ -110,31 +122,24 @@ def hydrate_committees(context):
                     "last_cash_on_hand_end_period", 0
                 )
             committee_data["last_cash_on_hand_end_period"] = cash_on_hand
-            combined_committee_totals["cash_on_hand"] += cash_on_hand
-            combined_committee_totals["claimed_committed"] += committee.get(
-                "claimedCommitted", 0
-            )
+            sector_keys = ["all"]
+            committee_sector = committee.get("sector")
+            if committee_sector in combined_committee_totals:
+                sector_keys.append(committee_sector)
+            for key in sector_keys:
+                combined_committee_totals[key]["cash_on_hand"] += cash_on_hand
+                combined_committee_totals[key]["claimed_committed"] += committee.get(
+                    "claimedCommitted", 0
+                )
 
             db.client.collection("committees").document(committee["id"]).set(
                 committee_data
             )
             committees_processed += 1
 
-    combined_committee_totals["receipts"] = round(
-        combined_committee_totals["receipts"], 2
-    )
-    combined_committee_totals["expenditures"] = round(
-        combined_committee_totals["expenditures"], 2
-    )
-    combined_committee_totals["disbursements"] = round(
-        combined_committee_totals["disbursements"], 2
-    )
-    combined_committee_totals["cash_on_hand"] = round(
-        combined_committee_totals["cash_on_hand"], 2
-    )
-    combined_committee_totals["claimed_committed"] = round(
-        combined_committee_totals["claimed_committed"], 2
-    )
+    for sector_key, totals_dict in combined_committee_totals.items():
+        for field in totals_dict:
+            totals_dict[field] = round(totals_dict[field], 2)
     db.client.collection("totals").document("committees").set(combined_committee_totals)
 
     return {
