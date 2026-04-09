@@ -1,3 +1,6 @@
+from utils import get_sector_keys
+
+
 def process_recent_contributions(db):
     """Generate a recent contributions snapshot across all tracked individuals and companies.
 
@@ -118,9 +121,44 @@ def process_recent_contributions(db):
     def get_sort_date(contrib):
         return contrib.get("contribution_receipt_date") or contrib.get("newest") or ""
 
+    def get_contribution_sectors(contrib):
+        """Return the set of frontend sector keys ("crypto", "ai") that this contribution belongs to.
+
+        Expands "tech" backend sector to both "crypto" and "ai".
+        """
+        sectors = set()
+        raw_sectors = set()
+        if contrib.get("source_type") == "company":
+            company_id = contrib.get("source_id")
+            raw_sector = (db.companies or {}).get(company_id, {}).get("sector")
+            if raw_sector:
+                raw_sectors.add(raw_sector)
+        else:
+            for company_id in (contrib.get("source_company_ids") or []):
+                if company_id:
+                    raw_sector = (db.companies or {}).get(company_id, {}).get("sector")
+                    if raw_sector:
+                        raw_sectors.add(raw_sector)
+        for raw_sector in raw_sectors:
+            # get_sector_keys returns ["all", ...], we only want the non-"all" keys
+            for key in get_sector_keys(raw_sector):
+                if key != "all":
+                    sectors.add(key)
+        return sectors
+
     all_contributions.sort(key=get_sort_date, reverse=True)
     most_recent = all_contributions[:50]
+    most_recent_crypto = [
+        c for c in all_contributions if "crypto" in get_contribution_sectors(c)
+    ][:50]
+    most_recent_ai = [
+        c for c in all_contributions if "ai" in get_contribution_sectors(c)
+    ][:50]
 
     db.client.collection("contributions").document("recent").set(
-        {"all": most_recent}
+        {
+            "all": {"all": most_recent},
+            "crypto": {"all": most_recent_crypto},
+            "ai": {"all": most_recent_ai},
+        }
     )

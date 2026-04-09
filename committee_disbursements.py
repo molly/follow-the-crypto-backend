@@ -1,4 +1,4 @@
-from utils import FEC_fetch, pick
+from utils import FEC_fetch, get_sector_keys, pick
 
 DISBURSEMENT_FIELDS = [
     "disbursement_amount",
@@ -119,10 +119,8 @@ def update_committee_disbursements(db, session):
                     + contributions.get("total_transferred", 0)
                     - disbursements_total
                 )
-                committee_sector = committee.get("sector")
-                total_receipts["all"] += net
-                if committee_sector in total_receipts:
-                    total_receipts[committee_sector] += net
+                for key in get_sector_keys(committee.get("sector")):
+                    total_receipts[key] += net
     db.client.collection("totals").document("committees").update({
         "all.net_receipts": total_receipts["all"],
         "crypto.net_receipts": total_receipts["crypto"],

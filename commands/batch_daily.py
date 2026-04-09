@@ -22,6 +22,7 @@ from individuals import update_spending_by_individuals
 from process_individual_contributions import process_individual_contributions
 from company_spending import update_spending_by_company
 from process_company_contributions import process_company_contributions
+from utils import set_individuals_constants
 
 
 def add_individuals_batch(individuals_data, process_immediately=False):
@@ -57,8 +58,8 @@ def add_individuals_batch(individuals_data, process_immediately=False):
     if not added_individuals:
         return {"status": "no_new_individuals", "added_count": 0}
     
-    # Update constants in Firestore
-    db.client.collection("constants").document("individuals").set(current_individuals)
+    # Update constants in Firestore (computes and injects sector for each individual)
+    current_individuals = set_individuals_constants(db.client, current_individuals, db.companies)
     db.individuals = current_individuals
     
     logging.info(f"Added {len(added_individuals)} individuals to constants")

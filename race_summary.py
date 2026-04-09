@@ -8,10 +8,11 @@ from race_utils import get_all_races, update_race
 
 RACE_PRIORITY = {
     "general": 0,
-    "primary_runoff": 1,
-    "primary": 2,
-    "convention": 3,
-    None: 4,
+    "general_runoff": 1,
+    "primary_runoff": 2,
+    "primary": 3,
+    "convention": 4,
+    None: 5,
 }
 
 
@@ -297,7 +298,12 @@ def summarize_races(db, session):
                 # Iterate through each candidate in the subrace. These should generally be in reverse chrono order.
                 for candidate in race["candidates"]:
                     # Add this subrace to their list of involved races
-                    candidates_data[candidate["name"]]["races"].append(race["type"])
+                    race_type = race.get("type")
+                    if race_type is None:
+                        logging.warning(
+                            f"Race missing 'type' field in {state} {race_id}: {race}"
+                        )
+                    candidates_data[candidate["name"]]["races"].append(race_type)
                     # Use party from race data as a fallback for candidates FEC didn't
                     # find (e.g., incumbents who declined to run in 2026 and therefore
                     # don't appear in the FEC candidates/search results for this cycle).
@@ -336,9 +342,9 @@ def summarize_races(db, session):
                         ] or (
                             candidates_data[candidate["name"]]["defeated_race"] is None
                         ):
-                            candidates_data[candidate["name"]]["defeated_race"] = race[
+                            candidates_data[candidate["name"]]["defeated_race"] = race.get(
                                 "type"
-                            ]
+                            )
                     if "declined" in candidate and candidate["declined"] is True:
                         candidates_data[candidate["name"]]["declined"] = True
                         if "declinedReason" in candidate:

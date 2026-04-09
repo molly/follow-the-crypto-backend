@@ -1,5 +1,5 @@
 from pipeline_core.task import task
-from utils import FEC_fetch, pick
+from utils import FEC_fetch, get_sector_keys, pick
 
 
 @task(
@@ -89,10 +89,7 @@ def hydrate_committees(context):
                         ],
                     ),
                 )
-                sector_keys = ["all"]
-                committee_sector = committee.get("sector")
-                if committee_sector in combined_committee_totals:
-                    sector_keys.append(committee_sector)
+                sector_keys = get_sector_keys(committee.get("sector"))
                 for key in sector_keys:
                     combined_committee_totals[key]["receipts"] += totals["receipts"]
                     combined_committee_totals[key]["expenditures"] += totals[
@@ -122,10 +119,7 @@ def hydrate_committees(context):
                     "last_cash_on_hand_end_period", 0
                 )
             committee_data["last_cash_on_hand_end_period"] = cash_on_hand
-            sector_keys = ["all"]
-            committee_sector = committee.get("sector")
-            if committee_sector in combined_committee_totals:
-                sector_keys.append(committee_sector)
+            sector_keys = get_sector_keys(committee.get("sector"))
             for key in sector_keys:
                 combined_committee_totals[key]["cash_on_hand"] += cash_on_hand
                 combined_committee_totals[key]["claimed_committed"] += committee.get(

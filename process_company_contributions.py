@@ -1,7 +1,7 @@
 from get_missing_recipients import get_missing_recipient_data
 from process_individual_contributions import handle_memo_items
 from recipient_utils import get_all_recipients, set_all_recipients
-from utils import pick, compare_names_lastfirst
+from utils import compare_names_lastfirst, get_sector_keys, pick
 
 ROLLUP_THRESHOLD = 10000
 
@@ -182,6 +182,10 @@ def process_company_contributions(db, session):
     all_companies_total = 0
     all_companies_by_party = {}
     all_companies_by_company = {}
+    sector_companies_data = {
+        "crypto": {"total": 0, "by_party": {}, "by_company": {}},
+        "ai": {"total": 0, "by_party": {}, "by_company": {}},
+    }
     # Track individual contribution transaction IDs that have already been attributed
     # to a company, to prevent double-counting when an individual is associated with
     # multiple companies (e.g. a founder of two related companies).
@@ -393,15 +397,28 @@ def process_company_contributions(db, session):
             party_summary[party] += group_data["total"]
 
         company_total = sum(party_summary.values())
-        all_companies_by_company[company_id] = {
+        company_entry = {
             "total": round(company_total, 2),
             "by_party": {k: round(v, 2) for k, v in party_summary.items()},
         }
+        all_companies_by_company[company_id] = company_entry
         all_companies_total += company_total
         for party, amount in party_summary.items():
             if party not in all_companies_by_party:
                 all_companies_by_party[party] = 0
             all_companies_by_party[party] += amount
+
+        company_sector = db.companies.get(company_id, {}).get("sector")
+        for key in get_sector_keys(company_sector):
+            if key == "all":
+                continue
+            sector_data = sector_companies_data[key]
+            sector_data["by_company"][company_id] = company_entry
+            sector_data["total"] += company_total
+            for party, amount in party_summary.items():
+                if party not in sector_data["by_party"]:
+                    sector_data["by_party"][party] = 0
+                sector_data["by_party"][party] += amount
 
         sorted_contributions = sorted(
             contributions.values(), key=lambda x: x["total"], reverse=True
@@ -413,9 +430,27 @@ def process_company_contributions(db, session):
 
     db.client.collection("totals").document("companies").set(
         {
-            "total": round(all_companies_total, 2),
-            "by_party": {k: round(v, 2) for k, v in all_companies_by_party.items()},
-            "by_company": all_companies_by_company,
+            "all": {
+                "total": round(all_companies_total, 2),
+                "by_party": {k: round(v, 2) for k, v in all_companies_by_party.items()},
+                "by_company": all_companies_by_company,
+            },
+            "crypto": {
+                "total": round(sector_companies_data["crypto"]["total"], 2),
+                "by_party": {
+                    k: round(v, 2)
+                    for k, v in sector_companies_data["crypto"]["by_party"].items()
+                },
+                "by_company": sector_companies_data["crypto"]["by_company"],
+            },
+            "ai": {
+                "total": round(sector_companies_data["ai"]["total"], 2),
+                "by_party": {
+                    k: round(v, 2)
+                    for k, v in sector_companies_data["ai"]["by_party"].items()
+                },
+                "by_company": sector_companies_data["ai"]["by_company"],
+            },
         }
     )
 

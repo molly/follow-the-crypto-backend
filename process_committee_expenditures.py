@@ -1,4 +1,5 @@
 from states import SPECIAL_ELECTIONS
+from utils import get_sector_keys
 
 
 def sort_and_slice(lst, length=10):
@@ -57,9 +58,14 @@ def process_expenditures(db):
         "ai": empty_parties(),
     }
     committees = {}
+
+    def empty_expenditure_totals():
+        return {"total": 0, "by_committee": {}}
+
     totals = {
-        "all": 0,
-        "by_committee": {},
+        "all": empty_expenditure_totals(),
+        "crypto": empty_expenditure_totals(),
+        "ai": empty_expenditure_totals(),
     }
     for uid, expenditure in all_expenditures.items():
         race = get_race_name(expenditure)
@@ -68,11 +74,15 @@ def process_expenditures(db):
         if state is None:
             state = "US"
 
-        totals["all"] += expenditure["expenditure_amount"]
-        if committee_id not in totals["by_committee"]:
-            totals["by_committee"][committee_id] = expenditure["expenditure_amount"]
-        else:
-            totals["by_committee"][committee_id] += expenditure["expenditure_amount"]
+        committee_sector = db.committees.get(committee_id, {}).get("sector")
+        sector_keys = get_sector_keys(committee_sector)
+
+        for key in sector_keys:
+            totals[key]["total"] += expenditure["expenditure_amount"]
+            if committee_id not in totals[key]["by_committee"]:
+                totals[key]["by_committee"][committee_id] = expenditure["expenditure_amount"]
+            else:
+                totals[key]["by_committee"][committee_id] += expenditure["expenditure_amount"]
 
         # Initialize state and set total
         if state not in states:
@@ -132,10 +142,6 @@ def process_expenditures(db):
                 "oppose_benefit_mix": 0,
                 "oppose_benefit_unk": 0,
             }
-        committee_sector = db.committees.get(committee_id, {}).get("sector")
-        sector_keys = ["all"]
-        if committee_sector in all_parties:
-            sector_keys.append(committee_sector)
         if expenditure["support_oppose_indicator"] == "S":
             if expenditure["candidate_party"] == "DEM":
                 committees[committee_id]["dem_support"] += expenditure[
@@ -207,7 +213,7 @@ def process_expenditures(db):
         )
     db.client.collection("expenditures").document("total").set(totals)
 
-    # Get most recent for committee, all
+    # Get most recent for committee, all, and by sector
     most_recent_all = [x["uid"] for x in sort_and_slice(all_expenditures.values(), 50)]
     most_recent_by_committee = {}
 
@@ -222,10 +228,60 @@ def process_expenditures(db):
                 )
             )
         ]
+
+    crypto_committee_ids_set = {
+        cid for cid, c in db.committees.items()
+        if c.get("sector") in ("crypto", "tech")
+    }
+    ai_committee_ids_set = {
+        cid for cid, c in db.committees.items()
+        if c.get("sector") in ("ai", "tech")
+    }
+    most_recent_crypto = [
+        x["uid"]
+        for x in sort_and_slice(
+            [
+                e
+                for e in all_expenditures.values()
+                if e["committee_id"] in crypto_committee_ids_set
+            ],
+            50,
+        )
+    ]
+    most_recent_ai = [
+        x["uid"]
+        for x in sort_and_slice(
+            [
+                e
+                for e in all_expenditures.values()
+                if e["committee_id"] in ai_committee_ids_set
+            ],
+            50,
+        )
+    ]
+
     db.client.collection("expenditures").document("recent").set(
         {
-            "all": most_recent_all,
-            "by_committee": most_recent_by_committee,
+            "all": {
+                "all": most_recent_all,
+                "by_committee": most_recent_by_committee,
+            },
+            "crypto": {
+                "all": most_recent_crypto,
+                "by_committee": {
+                    k: v
+                    for k, v in most_recent_by_committee.items()
+                    if k in crypto_committee_ids_set
+                },
+            },
+            "ai": {
+                "all": most_recent_ai,
+                "by_committee": {
+                    k: v
+                    for k, v in most_recent_by_committee.items()
+                    if k in ai_committee_ids_set
+                },
+            },
         }
     )
     db.client.collection("expenditures").document("by_party").set(all_parties)

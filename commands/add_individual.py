@@ -13,6 +13,7 @@ import requests
 from Database import Database
 from individuals import update_spending_by_individuals
 from process_individual_contributions import process_individual_contributions
+from utils import set_individuals_constants
 from company_spending import update_spending_by_company
 from company_utils import update_company_contributions_selective
 
@@ -107,9 +108,9 @@ def add_individual(individual_id: str, individual_data: dict, fetch_immediately:
     current_individuals = db.individuals.copy()
     current_individuals[individual_id] = individual_data
     
-    # Update Firestore
-    db.client.collection("constants").document("individuals").set(current_individuals)
-    
+    # Update Firestore (computes and injects sector for each individual)
+    current_individuals = set_individuals_constants(db.client, current_individuals, db.companies)
+
     # Update local cache
     db.individuals = current_individuals
     

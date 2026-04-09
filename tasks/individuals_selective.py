@@ -7,6 +7,7 @@ from individuals import update_spending_by_individuals
 from process_individual_contributions import process_individual_contributions as process_ind
 from company_spending import update_spending_by_company
 from process_company_contributions import process_company_contributions
+from utils import set_individuals_constants
 import logging
 
 
@@ -101,9 +102,9 @@ def add_and_process_individual(context, individual_id, individual_data):
     current_individuals = context.db.individuals.copy()
     current_individuals[individual_id] = individual_data
     
-    # Update Firestore
-    context.db.client.collection("constants").document("individuals").set(current_individuals)
-    
+    # Update Firestore (computes and injects sector for each individual)
+    current_individuals = set_individuals_constants(context.db.client, current_individuals, context.db.companies)
+
     # Update local cache
     context.db.individuals = current_individuals
     
