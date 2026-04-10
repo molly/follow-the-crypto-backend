@@ -177,6 +177,8 @@ def get_expenditure_race_type(expenditure, races=None):
                             return race["type"]
             return None
     else:
+        if election_type == "GR":
+            return "general_runoff"
         election_type = election_type[0]
     if election_type == "G":
         return "general"
@@ -195,7 +197,10 @@ def get_expenditure_race_type(expenditure, races=None):
                 return "primary_runoff"
             elif split_type[1] == "general":
                 return "general"
-        return "special"
+        # Can't determine the sub-type from election_type_full; fall through to
+        # date-matching rather than returning "special" which conflates the
+        # election category (special vs. regular cycle) with the race stage.
+        return None
     if election_type == "O":
         return "other"
     else:

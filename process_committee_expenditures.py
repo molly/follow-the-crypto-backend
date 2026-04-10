@@ -15,7 +15,9 @@ def sort_and_slice(lst, length=10):
     )[:length]
 
 
-def get_race_name(expenditure):
+def get_race_name(expenditure, race_exists=None, candidate_to_race=None):
+    """Returns (race_name, resolved_as_special) where resolved_as_special is True
+    when a missing election_type was inferred to be a special election via raceDetails."""
     race = "{candidate_office_state}-{candidate_office}".format(**expenditure)
     if (
         expenditure["candidate_office_district"]
@@ -29,14 +31,48 @@ def get_race_name(expenditure):
     # entries.  Gating on SPECIAL_ELECTIONS prevents that.
     if election_type.startswith("S") and race in SPECIAL_ELECTIONS:
         race += "-special"
-    return race
+        return race, False
+    elif not election_type and race in SPECIAL_ELECTIONS and race_exists is not None:
+        # For efiled expenditures with no election_type, resolve using raceDetails:
+        # if only one of the regular/special race exists, use that; if both exist,
+        # check which race the candidate belongs to.
+        special_race = race + "-special"
+        base_exists = race in race_exists
+        special_exists = special_race in race_exists
+        if special_exists and not base_exists:
+            return special_race, True
+        elif base_exists and special_exists and candidate_to_race is not None:
+            candidate_id = expenditure.get("candidate_id")
+            candidate_races = candidate_to_race.get(candidate_id, [])
+            if special_race in candidate_races and race not in candidate_races:
+                return special_race, True
+    return race, False
 
 
 def process_expenditures(db):
     all_expenditures = (
         db.client.collection("expenditures").document("all").get().to_dict()
     )
+
+    # Build lookups for resolving efiled expenditures with no election_type.
+    # race_exists: set of full race IDs (e.g. "GA-H-14-special") present in raceDetails.
+    # candidate_to_race: candidate_id → list of full race IDs they appear in.
+    race_exists = set()
+    candidate_to_race = {}
+    for state_doc in db.client.collection("raceDetails").stream():
+        state = state_doc.id
+        for race_id, race_data in state_doc.to_dict().items():
+            full_race_id = f"{state}-{race_id}"
+            race_exists.add(full_race_id)
+            for candidate in race_data.get("candidates", {}).values():
+                cid = candidate.get("candidate_id")
+                if cid:
+                    if cid not in candidate_to_race:
+                        candidate_to_race[cid] = []
+                    candidate_to_race[cid].append(full_race_id)
+
     states = {}
+    resolved_as_special = set()
     new_opposition_spending = set()
     all_parties = {
         "dem_oppose": 0,
@@ -54,7 +90,9 @@ def process_expenditures(db):
         "by_committee": {},
     }
     for uid, expenditure in all_expenditures.items():
-        race = get_race_name(expenditure)
+        race, is_resolved_special = get_race_name(expenditure, race_exists, candidate_to_race)
+        if is_resolved_special:
+            resolved_as_special.add(uid)
         committee_id = expenditure["committee_id"]
         state = expenditure["candidate_office_state"]
         if state is None:
@@ -207,4 +245,14 @@ def process_expenditures(db):
         }
     )
     db.client.collection("expenditures").document("by_party").set(all_parties)
+
+    # Mark expenditures we inferred as special-election so the frontend can
+    # construct the correct race ID (e.g. GA-H-14-special) even when subrace
+    # is a sub-type like "general_runoff".
+    if resolved_as_special:
+        for uid in resolved_as_special:
+            db.client.collection("expenditures").document("all").update(
+                {db.client.field_path(uid, "is_special"): True}
+            )
+
     return new_opposition_spending

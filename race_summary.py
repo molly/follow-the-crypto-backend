@@ -7,10 +7,11 @@ from unidecode import unidecode
 
 RACE_PRIORITY = {
     "general": 0,
-    "primary_runoff": 1,
-    "primary": 2,
-    "convention": 3,
-    None: 4,
+    "general_runoff": 1,
+    "primary_runoff": 2,
+    "primary": 3,
+    "convention": 4,
+    None: 5,
 }
 
 
