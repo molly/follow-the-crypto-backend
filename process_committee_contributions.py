@@ -170,14 +170,14 @@ def process_contribution(contrib, db, donorMap):
 
     link = None
     for company in db.companies.values():
-        if company["name"].upper() == group or any(
-            alias.upper() == group for alias in company.get("aliases", [])
+        if company["name"].upper() == group.upper() or any(
+            alias.upper() == group.upper() for alias in company.get("aliases", [])
         ):
             link = "/companies/" + company["id"]
             break
     if not link:
         for committee in db.committees.values():
-            if committee["name"].upper() == group:
+            if committee["name"].upper() == group.upper():
                 link = "/committees/" + committee["id"]
                 break
     if not link:
@@ -442,6 +442,32 @@ def process_committee_contributions(db):
             elif group in db.company_aliases:
                 group = db.company_aliases[group]
 
+            # Regenerate link using current company/committee/individual data,
+            # since the stored contrib may predate a company being added.
+            link = None
+            for company in db.companies.values():
+                if company["name"].upper() == group.upper() or any(
+                    alias.upper() == group.upper()
+                    for alias in company.get("aliases", [])
+                ):
+                    link = "/companies/" + company["id"]
+                    break
+            if not link:
+                for committee in db.committees.values():
+                    if committee["name"].upper() == group.upper():
+                        link = "/committees/" + committee["id"]
+                        break
+            if not link and "," in group:
+                for individual in db.individuals.values():
+                    if compare_names_lastfirst(individual["name"], group):
+                        link = "/individuals/" + individual["id"]
+                        break
+            if not link and "link" in contrib:
+                link = contrib["link"]
+
+            if link:
+                contrib["link"] = link
+
             # Add group if it doesn't exist
             if group not in donorMap["groups"]:
                 donorMap["groups"][group] = {
@@ -449,8 +475,8 @@ def process_committee_contributions(db):
                     "rollup": {},
                     "total": 0,
                 }
-                if "link" in contrib:
-                    donorMap["groups"][group]["link"] = contrib["link"]
+                if link:
+                    donorMap["groups"][group]["link"] = link
 
             # Add to contributions list
             donorMap["groups"][group]["contributions"].append(contrib)

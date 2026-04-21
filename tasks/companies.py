@@ -6,7 +6,7 @@ from process_company_contributions import process_company_contributions as proce
 @task(
     name="fetch_company_spending",
     depends_on=["hydrate_committees"],
-    outputs=["rawCompanySpending"],
+    outputs=["rawCompanyContributions"],
 )
 def fetch_company_spending(context):
     """Fetch company spending data."""
@@ -17,7 +17,7 @@ def fetch_company_spending(context):
 @task(
     name="process_company_contributions",
     depends_on=["fetch_company_spending"],
-    inputs=["rawCompanySpending"],
+    inputs=["rawCompanyContributions"],
     outputs=["companies"],
 )
 def process_company_contributions(context):

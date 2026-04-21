@@ -38,6 +38,8 @@ to_skip = {
     "Kirt Burgess",
     "Jeffrey Kanter",
     "Carl Harris Sr.",
+    "Jean Depalis",
+    "Deborah Calhoun Rhodes",
     "Jean Depalis"
 }
 

@@ -391,8 +391,8 @@ def process_individual_contributions(db, session):
                 party_summary[party] = 0
             party_summary[party] += group_data["total"]
 
-        db.client.collection("individuals").document(ind_id).set(
-            {"party_summary": party_summary}, merge=True
+        db.client.collection("individuals").document(ind_id).update(
+            {"party_summary": party_summary}
         )
 
         individual_total = sum(party_summary.values())

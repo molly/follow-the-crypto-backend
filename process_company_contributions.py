@@ -377,9 +377,8 @@ def process_company_contributions(db, session):
         sorted_contributions = sorted(
             contributions.values(), key=lambda x: x["total"], reverse=True
         )
-        db.client.collection("companies").document(company_id).set(
-            {"party_summary": party_summary, "contributions": sorted_contributions},
-            merge=True,
+        db.client.collection("companies").document(company_id).update(
+            {"party_summary": party_summary, "contributions": sorted_contributions}
         )
 
     db.client.collection("totals").document("companies").set(
