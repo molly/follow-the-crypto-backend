@@ -109,10 +109,14 @@ def should_omit(contrib, other_contribs, ids_to_omit):
                 print(receipt_type_full)
                 return False
         return True
-    if (
-        "ATTRIBUTION" in (contrib.get("memo_text", "") or "").upper()
-        or "ATTRIBUTION" in (contrib.get("receipt_type_full", "") or "").upper()
-    ):
+    memo = (contrib.get("memo_text", "") or "").upper()
+    receipt_type = (contrib.get("receipt_type_full", "") or "").upper()
+    # Skip the LLC/partnership parent records that say "SEE ATTRIBUTION BELOW" — those are
+    # duplicates of the individual partner attribution records which follow them. Keep the
+    # "PARTNERSHIP ATTRIBUTION" records since those are the actual attributed contributions.
+    if "ATTRIBUTION" in receipt_type:
+        return True
+    if "SEE ATTRIBUTION" in memo:
         return True
     return False
 

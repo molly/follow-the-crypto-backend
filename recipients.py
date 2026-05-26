@@ -1,5 +1,5 @@
 from utils import pick, get_beneficiaries
-from recipient_utils import get_all_recipients
+from recipient_utils import get_all_recipients, has_significant_direct_support
 
 INDIVIDUAL_KEYS = [
     "individual",
@@ -327,15 +327,45 @@ def summarize_recipients(db):
         if (
             x[0] != "C"
             and x not in candidates_with_expenditures_ids
-            and recipients[x]
-            .get("candidate_details", {})
-            .get("isRunningThisCycle", False)
+            and recipients[x].get("candidate_details", {}).get("isRunningThisCycle", False)
+            and has_significant_direct_support(recipients[x])
         )
     ]
 
-    db.client.collection("allRecipients").document("recipientsWithContribs").set(
-        recipients
-    )
+    # Delete stale recipient documents before writing new ones.
+    # recipientsWithContribs grew too large for a single Firestore document
+    # (INDEX_ENTRIES_COUNT_LIMIT_EXCEEDED), so each recipient is now stored as
+    # its own document in the recipientDetails collection.
+    existing_docs = list(db.client.collection("recipientDetails").stream())
+    existing_ids = {doc.id for doc in existing_docs}
+    new_ids = set(recipients.keys())
+    stale_ids = existing_ids - new_ids
+    if stale_ids:
+        batch = db.client.batch()
+        count = 0
+        for stale_id in stale_ids:
+            batch.delete(db.client.collection("recipientDetails").document(stale_id))
+            count += 1
+            if count >= 500:
+                batch.commit()
+                batch = db.client.batch()
+                count = 0
+        if count > 0:
+            batch.commit()
+
+    batch = db.client.batch()
+    count = 0
+    for recipient_id, recipient_data in recipients.items():
+        doc_ref = db.client.collection("recipientDetails").document(recipient_id)
+        batch.set(doc_ref, recipient_data)
+        count += 1
+        if count >= 500:
+            batch.commit()
+            batch = db.client.batch()
+            count = 0
+    if count > 0:
+        batch.commit()
+
     db.client.collection("allRecipients").document("recipientsOrder").set(
         {
             "order": order,

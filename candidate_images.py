@@ -37,7 +37,13 @@ to_skip = {
     "Jullie Kelley",
     "Joshua Kolasinski",
     "Kirt Burgess",
-    "Jeffrey Kanter"
+    "Jeffrey Kanter",
+    "Carl Harris Sr.",
+    "Jean Depalis",
+    "Deborah Calhoun Rhodes",
+    "Tisha Benoit",
+    "Andromeda Crum",
+    "David Anderson",
 }
 
 

@@ -45,7 +45,6 @@ def primaries(db):
                     if subrace.get("canceled", False):
                         primary_happened = True
                         continue
-                    race_date_str = subrace.get("date", None)
                     race_date = date.fromisoformat(subrace["date"])
                     if race_date > date.today():
                         primary_happened = False

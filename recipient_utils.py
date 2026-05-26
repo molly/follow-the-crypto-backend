@@ -9,6 +9,27 @@ character of the committee ID (always a digit for FEC IDs).
 SHARD_PREFIX = "recipients_"
 LEGACY_DOC = "recipients"
 
+# A race is considered significantly supported if total contributions meet this
+# threshold, or if any single contributor's total meets the per-contributor threshold.
+DIRECT_SUPPORT_TOTAL_THRESHOLD = 25_000
+DIRECT_SUPPORT_CONTRIBUTOR_THRESHOLD = 10_000
+
+
+def has_significant_direct_support(recipient: dict) -> bool:
+    """Return True if a recipient has significant direct industry support.
+
+    Passes the bar if:
+    - Total contributions from all tracked sources >= $25,000, OR
+    - Any single contributor's total contributions >= $10,000
+    """
+    if recipient.get("total", 0) >= DIRECT_SUPPORT_TOTAL_THRESHOLD:
+        return True
+    return any(
+        c["total"] >= DIRECT_SUPPORT_CONTRIBUTOR_THRESHOLD
+        for group in recipient.get("contributions", [])
+        for c in group.get("contributions", [])
+    )
+
 
 def _shard_key(committee_id: str) -> str:
     return f"{SHARD_PREFIX}{committee_id[-1]}"

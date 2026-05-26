@@ -5,6 +5,7 @@ from utils import FEC_fetch, compare_names, get_expenditure_race_type
 from states import SINGLE_MEMBER_STATES
 from unidecode import unidecode
 from race_utils import get_all_races, update_race
+from recipient_utils import has_significant_direct_support
 
 RACE_PRIORITY = {
     "general": 0,
@@ -73,12 +74,8 @@ def summarize_races(db, session):
     states_expenditures = (
         db.client.collection("expenditures").document("states").get().to_dict()
     )
-    recipients = (
-        db.client.collection("allRecipients")
-        .document("recipientsWithContribs")
-        .get()
-        .to_dict()
-    )
+    recipient_docs = db.client.collection("recipientDetails").stream()
+    recipients = {doc.id: doc.to_dict() for doc in recipient_docs}
     for state, state_data in all_race_data.items():
         races_expenditures = states_expenditures.get(state, {}).get("by_race", {})
         # Iterate through each race in each state
@@ -272,7 +269,12 @@ def summarize_races(db, session):
 
                 if candidates_data[entry["common_name"]].get("candidate_id"):
                     candidate_id = candidates_data[entry["common_name"]]["candidate_id"]
-                    if candidate_id in recipients:
+                    # Normalize through candidate aliases so stale IDs (e.g. old House
+                    # ID after switching to Senate) resolve to the canonical ID used as
+                    # the recipientDetails document key.
+                    candidate_id = db.candidate_aliases.get(candidate_id, candidate_id)
+                    recipient = recipients.get(candidate_id)
+                    if recipient and has_significant_direct_support(recipient):
                         candidates_data[entry["common_name"]][
                             "has_non_pac_support"
                         ] = True
@@ -397,16 +399,25 @@ def summarize_races(db, session):
                 if "expenditure_committees" not in candidates_data[candidate_key]:
                     candidates_data[candidate_key]["expenditure_committees"] = set()
 
-                # Add the expenditure's sub-race to the candidate's list of expenditure_races
-                subrace = expenditure.get("subrace", None)
-                if not subrace:
-                    subrace = get_expenditure_race_type(expenditure, race_data["races"])
-                    if subrace:
-                        # Update the expenditure with the subrace now that we've calculated it
+                # Add the expenditure's sub-race to the candidate's list of expenditure_races.
+                stored_subrace = expenditure.get("subrace", None)
+                if expenditure.get("election_type"):
+                    # election_type is available: recompute deterministically from the FEC code.
+                    # Races list not needed — the code (P/G/R/S/etc.) is sufficient.
+                    subrace = get_expenditure_race_type(expenditure, None)
+                    if not subrace:
+                        subrace = stored_subrace
+                    elif subrace != stored_subrace:
                         db.client.collection("expenditures").document("all").update(
                             {db.client.field_path(expenditure_id, "subrace"): subrace}
                         )
-                candidates_data[candidate_key]["expenditure_races"].add(subrace)
+                else:
+                    # Efiled expenditure: no election_type, so trust the stored subrace.
+                    # Date-based matching requires reliable race ordering, which we can't
+                    # guarantee (races may be manually reordered).
+                    subrace = stored_subrace
+                if subrace:
+                    candidates_data[candidate_key]["expenditure_races"].add(subrace)
 
                 # Add expenditure to total support/oppose amount
                 if expenditure["support_oppose_indicator"] == "S":
@@ -427,27 +438,28 @@ def summarize_races(db, session):
                 if c_id not in spending:
                     spending[c_id] = {"total": 0, "subraces": {}}
                 spending[c_id]["total"] += expenditure["expenditure_amount"]
-                if subrace not in spending[c_id]["subraces"]:
-                    spending[c_id]["subraces"][subrace] = {"candidates": {}, "total": 0}
-                spending[c_id]["subraces"][subrace]["total"] += expenditure[
-                    "expenditure_amount"
-                ]
-                if (
-                    candidate_key
-                    not in spending[c_id]["subraces"][subrace]["candidates"]
-                ):
-                    spending[c_id]["subraces"][subrace]["candidates"][candidate_key] = {
-                        "support": 0,
-                        "oppose": 0,
-                    }
-                if expenditure["support_oppose_indicator"] == "S":
-                    spending[c_id]["subraces"][subrace]["candidates"][candidate_key][
-                        "support"
-                    ] += expenditure["expenditure_amount"]
-                elif expenditure["support_oppose_indicator"] == "O":
-                    spending[c_id]["subraces"][subrace]["candidates"][candidate_key][
-                        "oppose"
-                    ] += expenditure["expenditure_amount"]
+                if subrace:
+                    if subrace not in spending[c_id]["subraces"]:
+                        spending[c_id]["subraces"][subrace] = {"candidates": {}, "total": 0}
+                    spending[c_id]["subraces"][subrace]["total"] += expenditure[
+                        "expenditure_amount"
+                    ]
+                    if (
+                        candidate_key
+                        not in spending[c_id]["subraces"][subrace]["candidates"]
+                    ):
+                        spending[c_id]["subraces"][subrace]["candidates"][candidate_key] = {
+                            "support": 0,
+                            "oppose": 0,
+                        }
+                    if expenditure["support_oppose_indicator"] == "S":
+                        spending[c_id]["subraces"][subrace]["candidates"][candidate_key][
+                            "support"
+                        ] += expenditure["expenditure_amount"]
+                    elif expenditure["support_oppose_indicator"] == "O":
+                        spending[c_id]["subraces"][subrace]["candidates"][candidate_key][
+                            "oppose"
+                        ] += expenditure["expenditure_amount"]
 
             # Handle candidates who have withdrawn
             withdrawn_candidates = (

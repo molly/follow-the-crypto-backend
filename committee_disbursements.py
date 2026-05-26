@@ -8,6 +8,57 @@ DISBURSEMENT_FIELDS = [
     "transaction_id",
 ]
 
+# F3X-22: transfers to affiliated/authorized committees
+# F3X-23: contributions to other political committees (e.g. contributions to non-affiliated PACs)
+DISBURSEMENT_LINE_NUMBERS = ["F3X-22", "F3X-23"]
+
+
+def _fetch_disbursements_for_line(session, committee_id, line_number, disbursements):
+    """Fetch all Schedule B disbursements for a given line number and merge into disbursements dict."""
+    last_disbursement_date = None
+    last_index = None
+    disbursements_count = 0
+    while True:
+        data = FEC_fetch(
+            session,
+            "committee disbursements",
+            "https://api.open.fec.gov/v1/schedules/schedule_b",
+            params={
+                "committee_id": committee_id,
+                "two_year_transaction_period": 2026,
+                "line_number": line_number,
+                "last_index": last_index,
+                "last_disbursement_date": last_disbursement_date,
+                "per_page": 100,
+            },
+        )
+        if not data:
+            continue
+        disbursements_count += len(data["results"])
+        for disbursement in data["results"]:
+            if not disbursement.get("recipient_committee_id"):
+                continue
+            recipient_id = disbursement["recipient_committee_id"]
+            if recipient_id not in disbursements:
+                disbursements[recipient_id] = {
+                    "total": disbursement["disbursement_amount"],
+                    "recipient_name": disbursement["recipient_name"],
+                    "disbursements": [pick(disbursement, DISBURSEMENT_FIELDS)],
+                }
+            else:
+                disbursements[recipient_id]["total"] += disbursement["disbursement_amount"]
+                disbursements[recipient_id]["disbursements"].append(
+                    pick(disbursement, DISBURSEMENT_FIELDS)
+                )
+
+        if disbursements_count >= data["pagination"]["count"]:
+            break
+        else:
+            last_index = data["pagination"]["last_indexes"]["last_index"]
+            last_disbursement_date = data["pagination"]["last_indexes"][
+                "last_disbursement_date"
+            ]
+
 
 def update_committee_disbursements(db, session):
     committees = db.client.collection("committees").stream()
@@ -18,48 +69,8 @@ def update_committee_disbursements(db, session):
         committee_id = committee["id"]
         if committee["committee_type"] in ["N", "O", "Q", "V", "W"]:
             disbursements = {}
-            last_disbursement_date = None
-            last_index = None
-            disbursements_count = 0
-            while True:
-                data = FEC_fetch(
-                    session,
-                    "committee disbursements",
-                    "https://api.open.fec.gov/v1/schedules/schedule_b",
-                    params={
-                        "committee_id": committee_id,
-                        "two_year_transaction_period": 2026,
-                        "line_number": "F3X-22",
-                        "last_index": last_index,
-                        "last_disbursement_date": last_disbursement_date,
-                        "per_page": 100,
-                    },
-                )
-                if not data:
-                    continue
-                disbursements_count += data["pagination"]["per_page"]
-                for disbursement in data["results"]:
-                    if disbursement["recipient_committee_id"] not in disbursements:
-                        disbursements[disbursement["recipient_committee_id"]] = {
-                            "total": disbursement["disbursement_amount"],
-                            "recipient_name": disbursement["recipient_name"],
-                            "disbursements": [pick(disbursement, DISBURSEMENT_FIELDS)],
-                        }
-                    else:
-                        disbursements[disbursement["recipient_committee_id"]][
-                            "total"
-                        ] += disbursement["disbursement_amount"]
-                        disbursements[disbursement["recipient_committee_id"]][
-                            "disbursements"
-                        ].append(pick(disbursement, DISBURSEMENT_FIELDS))
-
-                if disbursements_count >= data["pagination"]["count"]:
-                    break
-                else:
-                    last_index = data["pagination"]["last_indexes"]["last_index"]
-                    last_disbursement_date = data["pagination"]["last_indexes"][
-                        "last_disbursement_date"
-                    ]
+            for line_number in DISBURSEMENT_LINE_NUMBERS:
+                _fetch_disbursements_for_line(session, committee_id, line_number, disbursements)
 
             if disbursements:
                 old_disbursements = committee.get("disbursements_by_committee", {})
@@ -100,13 +111,6 @@ def update_committee_disbursements(db, session):
                 {"disbursements_by_committee": disbursements}, merge=True
             )
 
-            disbursements_total = sum(
-                [
-                    recipient["total"]
-                    for recipient in disbursements.values()
-                    if recipient["total"] > 0
-                ]
-            )
             contributions = (
                 db.client.collection("contributions")
                 .document(committee_id)
@@ -114,11 +118,7 @@ def update_committee_disbursements(db, session):
                 .to_dict()
             )
             if contributions:
-                net = (
-                    contributions.get("total_contributed", 0)
-                    + contributions.get("total_transferred", 0)
-                    - disbursements_total
-                )
+                net = contributions.get("total_contributed", 0)
                 for key in get_sector_keys(committee.get("sector")):
                     total_receipts[key] += net
     db.client.collection("totals").document("committees").update({

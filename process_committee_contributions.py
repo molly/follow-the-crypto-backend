@@ -119,6 +119,9 @@ def is_redacted(contrib, allowlists):
     ):
         # No redactions needed if this isn't an individual
         return False
+    if (contrib.get("contribution_receipt_amount") or 0) >= 100000:
+        # Large contributions are newsworthy; don't redact
+        return False
     if not contrib["contributor_occupation"]:
         # Redact if the contributor is missing, just in case
         return True

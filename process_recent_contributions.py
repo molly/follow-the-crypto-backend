@@ -58,6 +58,17 @@ def process_recent_contributions(db):
             if c_id and "recipient" in group:
                 recipient_by_committee[c_id] = group["recipient"]
 
+        source_company_ids = [
+            company_name_to_id.get(name)
+            for name in ind_constant.get("company", [])
+        ]
+        ind_raw_sectors = set(
+            (db.companies or {}).get(cid, {}).get("sector")
+            for cid in source_company_ids
+            if cid
+        ) - {None}
+        ind_source_sector = ind_raw_sectors.pop() if len(ind_raw_sectors) == 1 else None
+
         contributions_by_date = ind_data.get("contributions_by_date", [])
         for contrib in contributions_by_date:
             manual_review = contrib.get("manualReview")
@@ -73,10 +84,8 @@ def process_recent_contributions(db):
                     "source_name": source_name,
                     "source_type": "individual",
                     "source_company": ind_constant.get("company", []),
-                    "source_company_ids": [
-                        company_name_to_id.get(name)
-                        for name in ind_constant.get("company", [])
-                    ],
+                    "source_company_ids": source_company_ids,
+                    "source_sector": ind_source_sector,
                     "committee_name": committee_name,
                     "committee_description": committee_description,
                     "candidate_ids": candidate_ids,
@@ -97,6 +106,7 @@ def process_recent_contributions(db):
             committee_id = group.get("committee_id")
             recipient = group.get("recipient")
             committee_name, committee_description, candidate_ids, sponsor_candidate_ids, candidate_details = get_committee_info(recipient)
+            company_source_sector = company_constant.get("sector")
             for contrib in group.get("contributions", []):
                 if contrib.get("isIndividual"):
                     continue
@@ -110,6 +120,7 @@ def process_recent_contributions(db):
                         "source_id": company_id,
                         "source_name": source_name,
                         "source_type": "company",
+                        "source_sector": company_source_sector,
                         "committee_name": committee_name,
                         "committee_description": committee_description,
                         "candidate_ids": candidate_ids,

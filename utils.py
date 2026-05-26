@@ -256,14 +256,15 @@ def get_expenditure_race_type(expenditure, races=None):
     if election_type == "C":
         return "convention"
     if election_type == "S":
-        split_type = re.split("[- ]", election_type_full)
-        if len(split_type) > 1:
-            if split_type[1] == "primary":
-                return "primary"
-            elif split_type[1] == "runoff":
-                return "primary_runoff"
-            elif split_type[1] == "general":
-                return "general"
+        if election_type_full:
+            split_type = re.split("[- ]", election_type_full)
+            if len(split_type) > 1:
+                if split_type[1] == "primary":
+                    return "primary"
+                elif split_type[1] == "runoff":
+                    return "primary_runoff"
+                elif split_type[1] == "general":
+                    return "general"
         return "special"
     if election_type == "O":
         return "other"

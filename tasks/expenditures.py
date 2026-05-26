@@ -42,7 +42,7 @@ def compute_company_state_spending_task(context):
 
 @task(
     name="update_candidate_expenditures",
-    depends_on=["summarize_races"],
+    depends_on=["prune_race_details"],
     inputs=["expenditures", "raceSummaries"],
 )
 def update_candidate_expenditures(context):
