@@ -2,6 +2,19 @@ from collections import defaultdict
 from recipient_utils import get_all_recipients
 
 
+def get_race_id(candidate):
+    """Construct a full race ID (e.g. 'FL-S', 'FL-H-01') from candidate details."""
+    state = candidate.get("state")
+    office = candidate.get("office")
+    district = candidate.get("district")
+    if not state or not office:
+        return None
+    race_id = f"{state}-{office}"
+    if office == "H" and district and int(district) != 0:
+        race_id += f"-{district}"
+    return race_id
+
+
 def compute_company_state_spending(db):
     """Compute company spending by state based on recipient candidate associations.
 
@@ -21,6 +34,12 @@ def compute_company_state_spending(db):
 
     # Aggregate: { state: { company_id: total } }
     by_state = {}
+
+    # Per-race aggregate: { race_id: { company_id: total } }
+    # Only includes candidates with isRunningThisCycle=True. The state's portion
+    # is split evenly among all states (including prior-cycle), then that portion
+    # is split evenly among the running races within each state.
+    by_race = {}
 
     # Prior cycle contributions: { state: [{ company_id, company_name, committee_id, committee_name, amount, candidates }] }
     prior_cycle_by_state = defaultdict(list)
@@ -56,6 +75,8 @@ def compute_company_state_spending(db):
             running_states = set()
             # Track excluded candidates per state for prior cycle reporting
             excluded_candidates_by_state = defaultdict(list)
+            # Track running races grouped by state: { state: set of race_ids }
+            running_races_by_state = defaultdict(set)
 
             for cid, candidate in candidate_details.items():
                 if cid not in candidate_ids:
@@ -65,7 +86,17 @@ def compute_company_state_spending(db):
                     continue
                 all_candidate_states.add(state)
                 if candidate.get("isRunningThisCycle", False):
+                    # If this candidate ID is aliased, they're running under a
+                    # different candidacy. Count the state so they don't appear
+                    # as prior-cycle, but skip race attribution since their old
+                    # committee's race is stale.
+                    if cid in db.candidate_aliases:
+                        running_states.add(state)
+                        continue
                     running_states.add(state)
+                    race_id = get_race_id(candidate)
+                    if race_id:
+                        running_races_by_state[state].add(race_id)
                 else:
                     excluded_candidates_by_state[state].append({
                         "name": candidate.get("name", ""),
@@ -88,6 +119,21 @@ def compute_company_state_spending(db):
                     by_state[state][company_id] + per_state_amount, 2
                 )
 
+            # Only attribute to a specific race if the committee's candidates
+            # are all in one race; skip multi-race committees to avoid
+            # misleading apportioned splits.
+            for state, races in running_races_by_state.items():
+                if len(races) != 1:
+                    continue
+                race_id = next(iter(races))
+                if race_id not in by_race:
+                    by_race[race_id] = {}
+                if company_id not in by_race[race_id]:
+                    by_race[race_id][company_id] = 0
+                by_race[race_id][company_id] = round(
+                    by_race[race_id][company_id] + per_state_amount, 2
+                )
+
             # Track prior cycle: states with no 2026 candidates
             dropped_states = all_candidate_states - running_states
             committee_name = recipient.get("committee_name", "")
@@ -101,6 +147,12 @@ def compute_company_state_spending(db):
                     "candidates": excluded_candidates_by_state.get(state, []),
                 })
 
+    # Group by_race into per-state lookup: { state: { race_id: { company_id: total } } }
+    by_state_races = defaultdict(dict)
+    for race_id, companies in by_race.items():
+        state = race_id.split("-")[0]
+        by_state_races[state][race_id] = companies
+
     # Load current expenditures.states and merge in by_companies
     states_doc = db.client.collection("expenditures").document("states").get()
     states_data = states_doc.to_dict() if states_doc.exists else {}
@@ -112,6 +164,7 @@ def compute_company_state_spending(db):
         states_data[state]["companies_total"] = round(
             sum(company_spending.values()), 2
         )
+        states_data[state]["by_race_companies"] = by_state_races.get(state, {})
         states_data[state]["prior_cycle_details"] = prior_cycle
         states_data[state]["prior_cycle_companies_total"] = round(
             sum(e["amount"] for e in prior_cycle), 2
@@ -127,6 +180,7 @@ def compute_company_state_spending(db):
                 "by_race": {},
                 "by_companies": by_state[state],
                 "companies_total": round(sum(by_state[state].values()), 2),
+                "by_race_companies": by_state_races.get(state, {}),
                 "prior_cycle_details": prior_cycle,
                 "prior_cycle_companies_total": round(
                     sum(e["amount"] for e in prior_cycle), 2

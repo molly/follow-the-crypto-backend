@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 import logging
 import re
-from utils import FEC_fetch, compare_names, get_expenditure_race_type
+from utils import FEC_fetch, compare_names, get_expenditure_race_type, get_sector_keys
 from states import SINGLE_MEMBER_STATES
 from unidecode import unidecode
 from race_utils import get_all_races, update_race
@@ -128,6 +128,10 @@ def summarize_races(db, session):
                     "common_name": candidate,
                     "support_total": 0,
                     "oppose_total": 0,
+                    "crypto_support_total": 0,
+                    "ai_support_total": 0,
+                    "crypto_oppose_total": 0,
+                    "ai_oppose_total": 0,
                     "races": [],  # Sub-races in which this person was a candidate
                     "defeated_race": None,  # Race in which this candidate was defeated
                 }
@@ -145,6 +149,10 @@ def summarize_races(db, session):
                         "common_name": candidate,
                         "support_total": 0,
                         "oppose_total": 0,
+                        "crypto_support_total": 0,
+                        "ai_support_total": 0,
+                        "crypto_oppose_total": 0,
+                        "ai_oppose_total": 0,
                         "races": [],
                         "withdrew": True,
                         "withdrew_race": None,  # Race from which candidate withdrew
@@ -274,7 +282,7 @@ def summarize_races(db, session):
                     # the recipientDetails document key.
                     candidate_id = db.candidate_aliases.get(candidate_id, candidate_id)
                     recipient = recipients.get(candidate_id)
-                    if recipient and has_significant_direct_support(recipient):
+                    if recipient:
                         candidates_data[entry["common_name"]][
                             "has_non_pac_support"
                         ] = True
@@ -359,6 +367,8 @@ def summarize_races(db, session):
             # Iterate through each expenditure in this race
             for expenditure_id in race_expenditures:
                 expenditure = all_expenditures[expenditure_id]
+                if not expenditure["expenditure_amount"]:
+                    continue
 
                 # Try to find the candidate this expenditure is associated with
                 try:
@@ -412,12 +422,26 @@ def summarize_races(db, session):
                             {db.client.field_path(expenditure_id, "subrace"): subrace}
                         )
                 else:
-                    # Efiled expenditure: no election_type, so trust the stored subrace.
-                    # Date-based matching requires reliable race ordering, which we can't
-                    # guarantee (races may be manually reordered).
+                    # Efiled expenditure: no election_type, trust the stored subrace.
                     subrace = stored_subrace
+                    if subrace is None:
+                        # No stored subrace; try date-based matching. Sort races descending
+                        # by date so get_expenditure_race_type() finds the nearest future race
+                        # correctly regardless of how races were manually ordered in Firestore.
+                        sorted_races = sorted(
+                            race_data.get("races", []),
+                            key=lambda r: r.get("date") or "",
+                            reverse=True,
+                        )
+                        subrace = get_expenditure_race_type(expenditure, sorted_races)
+                        if subrace:
+                            db.client.collection("expenditures").document("all").update(
+                                {db.client.field_path(expenditure_id, "subrace"): subrace}
+                            )
                 if subrace:
                     candidates_data[candidate_key]["expenditure_races"].add(subrace)
+
+                c_id = expenditure["committee_id"]
 
                 # Add expenditure to total support/oppose amount
                 if expenditure["support_oppose_indicator"] == "S":
@@ -426,15 +450,40 @@ def summarize_races(db, session):
                         + expenditure["expenditure_amount"],
                         2,
                     )
+                    sector_keys = get_sector_keys(db.committees.get(c_id, {}).get("sector"))
+                    if "crypto" in sector_keys:
+                        candidates_data[candidate_key]["crypto_support_total"] = round(
+                            candidates_data[candidate_key]["crypto_support_total"]
+                            + expenditure["expenditure_amount"],
+                            2,
+                        )
+                    if "ai" in sector_keys:
+                        candidates_data[candidate_key]["ai_support_total"] = round(
+                            candidates_data[candidate_key]["ai_support_total"]
+                            + expenditure["expenditure_amount"],
+                            2,
+                        )
                 elif expenditure["support_oppose_indicator"] == "O":
                     candidates_data[candidate_key]["oppose_total"] = round(
                         candidates_data[candidate_key]["oppose_total"]
                         + expenditure["expenditure_amount"],
                         2,
                     )
+                    sector_keys = get_sector_keys(db.committees.get(c_id, {}).get("sector"))
+                    if "crypto" in sector_keys:
+                        candidates_data[candidate_key]["crypto_oppose_total"] = round(
+                            candidates_data[candidate_key]["crypto_oppose_total"]
+                            + expenditure["expenditure_amount"],
+                            2,
+                        )
+                    if "ai" in sector_keys:
+                        candidates_data[candidate_key]["ai_oppose_total"] = round(
+                            candidates_data[candidate_key]["ai_oppose_total"]
+                            + expenditure["expenditure_amount"],
+                            2,
+                        )
 
                 # Add expenditure to per-committee spending
-                c_id = expenditure["committee_id"]
                 if c_id not in spending:
                     spending[c_id] = {"total": 0, "subraces": {}}
                 spending[c_id]["total"] += expenditure["expenditure_amount"]

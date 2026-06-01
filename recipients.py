@@ -164,6 +164,7 @@ def summarize_recipients(db):
                     recipients[beneficiary]["contributions"][company_id] = {
                         "company_id": company_id,
                         "company_name": company_name,
+                        "sector": db.companies.get(company_id, {}).get("sector"),
                         "total": 0,
                         "contributions": {},
                     }
@@ -272,6 +273,7 @@ def summarize_recipients(db):
                         "company_id": ind_id,
                         "company_name": display_name,
                         "individual_id": ind_id,
+                        "sector": ind_meta.get("sector"),
                         "total": 0,
                         "contributions": {},
                     }
@@ -328,7 +330,7 @@ def summarize_recipients(db):
             x[0] != "C"
             and x not in candidates_with_expenditures_ids
             and recipients[x].get("candidate_details", {}).get("isRunningThisCycle", False)
-            and has_significant_direct_support(recipients[x])
+            and recipients[x].get("total", 0) > 0
         )
     ]
 

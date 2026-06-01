@@ -68,6 +68,8 @@ def process_expenditures(db):
         "ai": empty_expenditure_totals(),
     }
     for uid, expenditure in all_expenditures.items():
+        if not expenditure["expenditure_amount"]:
+            continue
         race = get_race_name(expenditure)
         committee_id = expenditure["committee_id"]
         state = expenditure["candidate_office_state"]

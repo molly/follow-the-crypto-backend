@@ -1,5 +1,5 @@
 import logging
-from utils import FEC_fetch, pick, get_expenditure_race_type
+from utils import FEC_fetch, get_sector_keys, pick, get_expenditure_race_type
 from race_utils import get_all_races, save_races_for_state
 
 SCHEDULE_E_FIELDS = [
@@ -107,6 +107,10 @@ def update_candidate_outside_spending(db, session):
                                         "oppose": [],
                                         "support_total": 0,
                                         "oppose_total": 0,
+                                        "crypto_support_total": 0,
+                                        "ai_support_total": 0,
+                                        "crypto_oppose_total": 0,
+                                        "ai_oppose_total": 0,
                                     }
                                 if result["support_oppose_indicator"] == "S":
                                     outside_spending[match]["support"].append(
@@ -115,6 +119,11 @@ def update_candidate_outside_spending(db, session):
                                     outside_spending[match]["support_total"] += result[
                                         "expenditure_amount"
                                     ]
+                                    sector_keys = get_sector_keys(db.committees.get(result["committee_id"], {}).get("sector"))
+                                    if "crypto" in sector_keys:
+                                        outside_spending[match]["crypto_support_total"] += result["expenditure_amount"]
+                                    if "ai" in sector_keys:
+                                        outside_spending[match]["ai_support_total"] += result["expenditure_amount"]
                                     transaction_ids.add(result["transaction_id"])
                                 elif result["support_oppose_indicator"] == "O":
                                     outside_spending[match]["oppose"].append(
@@ -123,6 +132,11 @@ def update_candidate_outside_spending(db, session):
                                     outside_spending[match]["oppose_total"] += result[
                                         "expenditure_amount"
                                     ]
+                                    sector_keys = get_sector_keys(db.committees.get(result["committee_id"], {}).get("sector"))
+                                    if "crypto" in sector_keys:
+                                        outside_spending[match]["crypto_oppose_total"] += result["expenditure_amount"]
+                                    if "ai" in sector_keys:
+                                        outside_spending[match]["ai_oppose_total"] += result["expenditure_amount"]
                                     transaction_ids.add(result["transaction_id"])
 
                             else:
@@ -191,8 +205,13 @@ def update_candidate_outside_spending(db, session):
                                         "oppose": [],
                                         "support_total": 0,
                                         "oppose_total": 0,
+                                        "crypto_support_total": 0,
+                                        "ai_support_total": 0,
+                                        "crypto_oppose_total": 0,
+                                        "ai_oppose_total": 0,
                                     }
                                 if result["support_oppose_indicator"] == "S":
+                                    sector_keys = get_sector_keys(db.committees.get(result["committee_id"], {}).get("sector"))
                                     if amendment:
                                         try:
                                             old_index = next(
@@ -203,34 +222,36 @@ def update_candidate_outside_spending(db, session):
                                                 if item["transaction_id"]
                                                 == result["transaction_id"]
                                             )
-                                            outside_spending[match][
-                                                "support_total"
-                                            ] -= outside_spending[match]["support"][
-                                                old_index
-                                            ][
-                                                "expenditure_amount"
-                                            ]
-                                            outside_spending[match]["support"][
-                                                old_index
-                                            ] = pick(result, SCHEDULE_E_FIELDS)
-                                            outside_spending[match][
-                                                "support_total"
-                                            ] += result["expenditure_amount"]
+                                            old_amount = outside_spending[match]["support"][old_index]["expenditure_amount"]
+                                            outside_spending[match]["support_total"] -= old_amount
+                                            outside_spending[match]["support"][old_index] = pick(result, SCHEDULE_E_FIELDS)
+                                            outside_spending[match]["support_total"] += result["expenditure_amount"]
+                                            if "crypto" in sector_keys:
+                                                outside_spending[match]["crypto_support_total"] -= old_amount
+                                                outside_spending[match]["crypto_support_total"] += result["expenditure_amount"]
+                                            if "ai" in sector_keys:
+                                                outside_spending[match]["ai_support_total"] -= old_amount
+                                                outside_spending[match]["ai_support_total"] += result["expenditure_amount"]
                                         except StopIteration:
                                             outside_spending[match]["support"].append(
                                                 pick(result, SCHEDULE_E_FIELDS)
                                             )
-                                            outside_spending[match][
-                                                "support_total"
-                                            ] += result["expenditure_amount"]
+                                            outside_spending[match]["support_total"] += result["expenditure_amount"]
+                                            if "crypto" in sector_keys:
+                                                outside_spending[match]["crypto_support_total"] += result["expenditure_amount"]
+                                            if "ai" in sector_keys:
+                                                outside_spending[match]["ai_support_total"] += result["expenditure_amount"]
                                     else:
                                         outside_spending[match]["support"].append(
                                             pick(result, SCHEDULE_E_FIELDS)
                                         )
-                                        outside_spending[match][
-                                            "support_total"
-                                        ] += result["expenditure_amount"]
+                                        outside_spending[match]["support_total"] += result["expenditure_amount"]
+                                        if "crypto" in sector_keys:
+                                            outside_spending[match]["crypto_support_total"] += result["expenditure_amount"]
+                                        if "ai" in sector_keys:
+                                            outside_spending[match]["ai_support_total"] += result["expenditure_amount"]
                                 elif result["support_oppose_indicator"] == "O":
+                                    sector_keys = get_sector_keys(db.committees.get(result["committee_id"], {}).get("sector"))
                                     if amendment:
                                         try:
                                             old_index = next(
@@ -241,33 +262,34 @@ def update_candidate_outside_spending(db, session):
                                                 if item["transaction_id"]
                                                 == result["transaction_id"]
                                             )
-                                            outside_spending[match][
-                                                "oppose_total"
-                                            ] -= outside_spending[match]["oppose"][
-                                                old_index
-                                            ][
-                                                "expenditure_amount"
-                                            ]
-                                            outside_spending[match]["oppose"][
-                                                old_index
-                                            ] = pick(result, SCHEDULE_E_FIELDS)
-                                            outside_spending[match][
-                                                "oppose_total"
-                                            ] += result["expenditure_amount"]
+                                            old_amount = outside_spending[match]["oppose"][old_index]["expenditure_amount"]
+                                            outside_spending[match]["oppose_total"] -= old_amount
+                                            outside_spending[match]["oppose"][old_index] = pick(result, SCHEDULE_E_FIELDS)
+                                            outside_spending[match]["oppose_total"] += result["expenditure_amount"]
+                                            if "crypto" in sector_keys:
+                                                outside_spending[match]["crypto_oppose_total"] -= old_amount
+                                                outside_spending[match]["crypto_oppose_total"] += result["expenditure_amount"]
+                                            if "ai" in sector_keys:
+                                                outside_spending[match]["ai_oppose_total"] -= old_amount
+                                                outside_spending[match]["ai_oppose_total"] += result["expenditure_amount"]
                                         except:
                                             outside_spending[match]["oppose"].append(
                                                 pick(result, SCHEDULE_E_FIELDS)
                                             )
-                                            outside_spending[match][
-                                                "oppose_total"
-                                            ] += result["expenditure_amount"]
+                                            outside_spending[match]["oppose_total"] += result["expenditure_amount"]
+                                            if "crypto" in sector_keys:
+                                                outside_spending[match]["crypto_oppose_total"] += result["expenditure_amount"]
+                                            if "ai" in sector_keys:
+                                                outside_spending[match]["ai_oppose_total"] += result["expenditure_amount"]
                                     else:
                                         outside_spending[match]["oppose"].append(
                                             pick(result, SCHEDULE_E_FIELDS)
                                         )
-                                        outside_spending[match][
-                                            "oppose_total"
-                                        ] += result["expenditure_amount"]
+                                        outside_spending[match]["oppose_total"] += result["expenditure_amount"]
+                                        if "crypto" in sector_keys:
+                                            outside_spending[match]["crypto_oppose_total"] += result["expenditure_amount"]
+                                        if "ai" in sector_keys:
+                                            outside_spending[match]["ai_oppose_total"] += result["expenditure_amount"]
 
                             else:
                                 logging.error(

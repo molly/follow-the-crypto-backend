@@ -15,6 +15,7 @@ Usage:
 import argparse
 import logging
 import sys
+from datetime import datetime, timezone
 
 import google.cloud.logging
 from requests_cache import CachedSession
@@ -229,6 +230,9 @@ def main():
             print("\n✓ Dry run completed")
             return 0
         else:
+            db.client.collection("metadata").document("pipeline").set(
+                {"last_run": datetime.now(timezone.utc).isoformat()}
+            )
             print("\n✓ Pipeline completed successfully")
             return 0
 
