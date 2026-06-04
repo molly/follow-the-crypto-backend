@@ -1,6 +1,6 @@
 import csv
 from datetime import date, timedelta
-from race_utils import get_races_for_state
+from race_utils import get_races_for_state, is_defeated
 
 
 def primaries(db):
@@ -52,14 +52,16 @@ def primaries(db):
                         primary_happened = True
                     continue
 
+            # Win/loss is derived from the race's per-candidate `won` flags rather
+            # than a stored summary field (which is no longer produced).
+            defeated = is_defeated(race, candidate_data["common_name"])
+
             goal_achieved = None
             if primary_happened == False:
                 goal_achieved = "UPCOMING"
             elif primary_support > 0 and primary_oppose > 0:
                 goal_achieved = "INDETERMINATE"
-            elif candidate_data.get("defeated", False) or candidate_data.get(
-                "withdrew", False
-            ):
+            elif defeated or candidate_data.get("withdrew", False):
                 if primary_support > 0:
                     goal_achieved = False
                 elif primary_oppose > 0:
@@ -77,7 +79,7 @@ def primaries(db):
                     candidate_data["party"],
                     round(primary_support, 2),
                     round(primary_oppose, 2),
-                    candidate_data.get("defeated", False),
+                    defeated,
                     candidate_data.get("withdrew", False),
                     goal_achieved,
                 ]

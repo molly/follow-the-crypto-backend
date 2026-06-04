@@ -164,3 +164,7 @@ races.py
 .DS_Store
 cache/
 .env
+.claude/
+TODO.md
+CLAUDE.md
+*.txt

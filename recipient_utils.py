@@ -31,6 +31,26 @@ def has_significant_direct_support(recipient: dict) -> bool:
     )
 
 
+def resolve_recipient_party(committee: dict) -> str:
+    """Resolve a recipient committee's party for by-party summaries.
+
+    Prefers the committee's own party (ignoring nonpartisan "N*" codes), then
+    falls back to a unanimous party among its candidate_details. Returns "UNK"
+    when neither yields a partisan value.
+    """
+    party = committee.get("party")
+    if party is not None and not party.startswith("N"):
+        return party
+    parties = [
+        c.get("party")
+        for c in committee.get("candidate_details", {}).values()
+        if c.get("party") is not None
+    ]
+    if len(set(parties)) == 1 and not parties[0].startswith("N"):
+        return parties[0]
+    return "UNK"
+
+
 def _shard_key(committee_id: str) -> str:
     return f"{SHARD_PREFIX}{committee_id[-1]}"
 

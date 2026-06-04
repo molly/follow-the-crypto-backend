@@ -9,6 +9,8 @@ Legacy single-doc names (e.g. CA) are supported for backwards-compatible reads.
 
 import logging
 
+from states import SPECIAL_ELECTIONS, is_current_special, canonical_race_keys
+
 SHARD_COUNT = 10
 
 
@@ -59,6 +61,39 @@ def get_all_races(db_client) -> dict:
             all_races[state] = {}
         all_races[state].update(data)
     return all_races
+
+
+def get_most_recent_race_result(race_data: dict, candidate_name: str):
+    """The candidate's recorded win/loss in the most recent subrace they were in.
+
+    Returns True if they won it, False if they lost it, or None if that race has
+    no recorded result yet (e.g. an uncalled co-winner in a multi-winner primary,
+    or an upcoming race). Win/loss is derived from the per-race `won` flags rather
+    than a stored summary field, which keeps it correct when races are edited
+    between summarize runs.
+    """
+    involved = [
+        race
+        for race in race_data.get("races", [])
+        if any(c.get("name") == candidate_name for c in race.get("candidates", []))
+    ]
+    if not involved:
+        return None
+    most_recent = max(involved, key=lambda r: r.get("date") or "")
+    entry = next(
+        (
+            c
+            for c in most_recent.get("candidates", [])
+            if c.get("name") == candidate_name
+        ),
+        None,
+    )
+    return entry.get("won") if entry else None
+
+
+def is_defeated(race_data: dict, candidate_name: str) -> bool:
+    """Whether the candidate lost their most recent (finished, called) race."""
+    return get_most_recent_race_result(race_data, candidate_name) is False
 
 
 def save_races_for_state(db_client, state: str, race_data: dict) -> None:
@@ -142,3 +177,71 @@ def prune_untracked_races(db_client) -> None:
             else:
                 doc.reference.delete()
             logging.info(f"Pruned untracked races from {doc.id}: {removed}")
+
+
+def validate_special_elections(db, detail_ids=None, states_data=None) -> list:
+    """Guardrail for the hand-maintained SPECIAL_ELECTIONS map.
+
+    SPECIAL_ELECTIONS is domain knowledge that can't be derived from FEC data, so
+    it drifts silently as new specials are called or seats are reclassified. This
+    surfaces that drift by cross-checking the map against the spending buckets and
+    scraped raceDetails. It catches:
+
+      1. Misclassification: a current-cycle special-only seat (has_regular=False)
+         that nonetheless accumulated spending on its bare regular key — meaning
+         the "-special" routing isn't being applied.
+      2. Missing special detail: a canonical race key with spending but no
+         raceDetails entry (covers company-only specials like OH-S-special).
+
+    (General "spending but no detail" orphans are reported by the healthcheck's
+    orphaned-spending check, which ranks them by dollar amount.)
+
+    Logs every finding at WARNING level and returns them so a pipeline task can
+    fail loudly. Read-only. Pass detail_ids/states_data to reuse already-loaded
+    data, otherwise they're fetched here.
+    """
+
+    def short_id(state, race_id):
+        parts = race_id.split("-")
+        return "-".join(parts[1:]) if parts[0] == state else race_id
+
+    warnings = []
+
+    def warn(message):
+        warnings.append(message)
+        logging.warning("SPECIAL_ELECTIONS drift — %s", message)
+
+    if detail_ids is None:
+        detail_ids = {
+            state: set(races.keys())
+            for state, races in get_all_races(db.client).items()
+        }
+    if states_data is None:
+        states_data = (
+            db.client.collection("expenditures").document("states").get().to_dict()
+            or {}
+        )
+
+    for seat in SPECIAL_ELECTIONS:
+        if not is_current_special(seat):
+            continue
+        state = seat.split("-")[0]
+        have = detail_ids.get(state, set())
+        state_data = states_data.get(state, {})
+        spending_keys = set(state_data.get("by_race", {})) | set(
+            state_data.get("by_race_companies", {})
+        )
+
+        if not SPECIAL_ELECTIONS[seat]["has_regular"] and seat in spending_keys:
+            warn(
+                f"{seat}: classified special-only but has spending on the regular "
+                f"key — expected it to route to {seat}-special"
+            )
+
+        for key in canonical_race_keys(seat):
+            if key in spending_keys and short_id(state, key) not in have:
+                warn(f"{key}: spending present but no raceDetails entry")
+
+    if not warnings:
+        logging.info("validate_special_elections: no drift detected")
+    return warnings

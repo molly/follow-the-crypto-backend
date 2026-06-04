@@ -36,7 +36,7 @@ def get_missing_recipient_data(recipients, db, session):
     candidate_data = {}
     for recipient_id in recipients.keys():
         if recipient_id in db.committees:
-            recipients[recipient_id]["link"] = "/committees/" + recipient_id
+            recipients[recipient_id]["link"] = "/2026/committees/" + recipient_id
         if recipient_id in db.all_committees:
             recipients[recipient_id]["description"] = db.all_committees[recipient_id]
         if recipient_id in committee_data:
@@ -119,13 +119,13 @@ def get_missing_recipient_data(recipients, db, session):
                         in_regular_race = True
                         candidate_data[candidate_id][
                             "race_link"
-                        ] = f"/elections/{candidate['state']}-S"
+                        ] = f"/2026/elections/{candidate['state']}-S"
                     elif "S-special" in race_data and race_has_candidate(
                         race_data["S-special"], candidate_id
                     ):
                         candidate_data[candidate_id][
                             "race_link"
-                        ] = f"/elections/{candidate['state']}-S-special"
+                        ] = f"/2026/elections/{candidate['state']}-S-special"
                 elif candidate["office"] == "H":
                     district = (
                         candidate["district"]
@@ -138,13 +138,13 @@ def get_missing_recipient_data(recipients, db, session):
                         in_regular_race = True
                         candidate_data[candidate_id][
                             "race_link"
-                        ] = f"/elections/{candidate['state']}-H-{district}"
+                        ] = f"/2026/elections/{candidate['state']}-H-{district}"
                     elif f"H-{district}-special" in race_data and race_has_candidate(
                         race_data[f"H-{district}-special"], candidate_id
                     ):
                         candidate_data[candidate_id][
                             "race_link"
-                        ] = f"/elections/{candidate['state']}-H-{district}-special"
+                        ] = f"/2026/elections/{candidate['state']}-H-{district}-special"
             candidate_data[candidate_id]["isRunningThisCycle"] = (
                 2026 in candidate["election_years"] or in_regular_race
             )
@@ -229,12 +229,12 @@ def get_missing_recipient_data(recipients, db, session):
                     race_has_candidate(race_data["S"], candidate_id)
                     or race_has_candidate(race_data["S"], canonical_id)
                 ):
-                    details["race_link"] = f"/elections/{state}-S"
+                    details["race_link"] = f"/2026/elections/{state}-S"
                 elif "S-special" in race_data and (
                     race_has_candidate(race_data["S-special"], candidate_id)
                     or race_has_candidate(race_data["S-special"], canonical_id)
                 ):
-                    details["race_link"] = f"/elections/{state}-S-special"
+                    details["race_link"] = f"/2026/elections/{state}-S-special"
             elif office == "H":
                 district = details.get("district")
                 if not district:
@@ -245,7 +245,7 @@ def get_missing_recipient_data(recipients, db, session):
                     race_has_candidate(race_data[f"H-{district}"], candidate_id)
                     or race_has_candidate(race_data[f"H-{district}"], canonical_id)
                 ):
-                    details["race_link"] = f"/elections/{state}-H-{district}"
+                    details["race_link"] = f"/2026/elections/{state}-H-{district}"
                 elif f"H-{district}-special" in race_data and (
                     race_has_candidate(
                         race_data[f"H-{district}-special"], candidate_id
@@ -254,6 +254,6 @@ def get_missing_recipient_data(recipients, db, session):
                         race_data[f"H-{district}-special"], canonical_id
                     )
                 ):
-                    details["race_link"] = f"/elections/{state}-H-{district}-special"
+                    details["race_link"] = f"/2026/elections/{state}-H-{district}-special"
 
     return recipients

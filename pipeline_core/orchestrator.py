@@ -1,6 +1,6 @@
 import logging
 import traceback
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from datetime import datetime
 
 from .context import TaskContext
@@ -76,16 +76,32 @@ class PipelineOrchestrator:
         if task_names is None:
             tasks = [t for t in tasks if t.run_by_default]
 
-        # Filter out tasks that don't need execution (unless force=True)
-        if not force:
-            tasks = [t for t in tasks if self.state_tracker.needs_execution(t, force)]
+        # Decide which tasks to run. A task is scheduled if it is forced,
+        # independently needs execution (state/inputs changed), OR any of its
+        # dependencies are already scheduled in this run -- so a refreshed input
+        # always propagates to its downstream summaries within one invocation,
+        # without relying on per-document modification timestamps. `tasks` is
+        # topologically sorted, so every dependency is visited before its
+        # dependents and is already in `scheduled` by the time we reach them.
+        skip_set = set(skip_tasks) if skip_tasks else set()
+        scheduled: Set[str] = set()
+        planned: List[Task] = []
+        for t in tasks:
+            if t.name in skip_set:
+                continue
+            if self.state_tracker.needs_execution(t, force):
+                planned.append(t)
+                scheduled.add(t.name)
+            elif any(dep in scheduled for dep in t.depends_on):
+                trigger = next(dep for dep in t.depends_on if dep in scheduled)
+                logging.info(
+                    f"Task '{t.name}' scheduled because dependency "
+                    f"'{trigger}' is re-running"
+                )
+                planned.append(t)
+                scheduled.add(t.name)
 
-        # Remove explicitly skipped tasks
-        if skip_tasks:
-            skip_set = set(skip_tasks)
-            tasks = [t for t in tasks if t.name not in skip_set]
-
-        return tasks
+        return planned
 
     def execute(
         self,

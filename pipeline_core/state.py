@@ -63,6 +63,23 @@ class StateTracker:
                     )
                     return True
 
+        # Re-run if any dependency completed more recently than this task. Our
+        # output is stale relative to an input that a dependency has since
+        # refreshed -- e.g. update_race_details re-ran on its own, so the race
+        # roster summarize_races read is now out of date. This catches the
+        # cross-invocation case; build_execution_plan handles the case where a
+        # dependency is scheduled in this same run but hasn't completed yet.
+        if completed_at and task.depends_on:
+            for dep_name in task.depends_on:
+                dep_state = self.get_state(dep_name)
+                dep_completed = dep_state.get("completed_at") if dep_state else None
+                if dep_completed and dep_completed > completed_at:
+                    logging.debug(
+                        f"Task '{task.name}' dependency '{dep_name}' completed "
+                        f"more recently ({dep_completed} > {completed_at}), re-running"
+                    )
+                    return True
+
         # Task completed and inputs haven't changed
         logging.info(f"Skipping task '{task.name}' (already completed, inputs unchanged)")
         return False

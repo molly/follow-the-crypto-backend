@@ -93,6 +93,14 @@ Examples:
     )
 
     parser.add_argument(
+        "--full-contributions",
+        action="store_true",
+        help="Force a full re-fetch + overwrite of committee contributions instead of an "
+        "incremental update (rebuilds aggregates and reconciles amended/deleted transactions; "
+        "run periodically)",
+    )
+
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -211,6 +219,7 @@ def main():
         registry=registry,
         verbose=args.verbose,
     )
+    orchestrator.context.full_contributions = args.full_contributions
 
     try:
         results = orchestrator.run(

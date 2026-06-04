@@ -1,5 +1,6 @@
 from collections import defaultdict
 from recipient_utils import get_all_recipients
+from states import canonical_race_keys
 
 
 def get_race_id(candidate):
@@ -121,18 +122,25 @@ def compute_company_state_spending(db):
 
             # Only attribute to a specific race if the committee's candidates
             # are all in one race; skip multi-race committees to avoid
-            # misleading apportioned splits.
+            # misleading apportioned splits. The single-race guard operates on
+            # the base seat id (get_race_id), so a seat that holds both a special
+            # and a regular election still counts as one race here.
             for state, races in running_races_by_state.items():
                 if len(races) != 1:
                     continue
-                race_id = next(iter(races))
-                if race_id not in by_race:
-                    by_race[race_id] = {}
-                if company_id not in by_race[race_id]:
-                    by_race[race_id][company_id] = 0
-                by_race[race_id][company_id] = round(
-                    by_race[race_id][company_id] + per_state_amount, 2
-                )
+                base_race_id = next(iter(races))
+                # Direct contributions can't self-identify the election, so route
+                # them by the seat's canonical keys: a current-cycle special +
+                # regular seat shows the (unsplittable) money on BOTH races; a
+                # special-only seat shows it on the special.
+                for race_id in canonical_race_keys(base_race_id):
+                    if race_id not in by_race:
+                        by_race[race_id] = {}
+                    if company_id not in by_race[race_id]:
+                        by_race[race_id][company_id] = 0
+                    by_race[race_id][company_id] = round(
+                        by_race[race_id][company_id] + per_state_amount, 2
+                    )
 
             # Track prior cycle: states with no 2026 candidates
             dropped_states = all_candidate_states - running_states

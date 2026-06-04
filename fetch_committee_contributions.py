@@ -6,6 +6,11 @@ import re
 # to keep rawContributions documents under Firestore's 1MB limit.
 PRE_AGGREGATE_THRESHOLD = 1000
 
+# During an incremental run, stop paginating a committee once this many consecutive pages
+# (sorted newest-first) contain no transaction IDs we don't already have stored. The small
+# buffer (>1) absorbs minor reordering between adjacent pages.
+EARLY_STOP_PATIENCE = 2
+
 CONTRIBUTION_FIELDS = [
     "contributor_first_name",
     "contributor_middle_name",
@@ -26,6 +31,38 @@ CONTRIBUTION_FIELDS = [
 ]
 
 
+def aggregate_group_key(contrib):
+    """The employer (or contributor name) under which a small contribution is grouped."""
+    employer = (contrib.get("contributor_employer") or "").strip().upper()
+    if not employer or employer == "N/A":
+        employer = (contrib.get("contributor_name") or "UNKNOWN").strip().upper()
+    return employer
+
+
+def build_aggregate_record(group_name, contribs):
+    """Build a single aggregate record summarizing a group of small contributions."""
+    most_recent_date = max(
+        (c.get("contribution_receipt_date") or "" for c in contribs), default=""
+    )
+    # Use the most common line_number to preserve transfer-vs-contribution classification
+    line_numbers = [c.get("line_number") for c in contribs if c.get("line_number")]
+    line_number = max(set(line_numbers), key=line_numbers.count) if line_numbers else None
+
+    return {
+        "contributor_name": group_name,
+        "contributor_employer": group_name,
+        "entity_type": "ORG",
+        "contribution_receipt_amount": round(
+            sum(c["contribution_receipt_amount"] for c in contribs), 2
+        ),
+        "contribution_receipt_date": most_recent_date,
+        "line_number": line_number,
+        "transaction_id": f"empgroup_{group_name}",
+        "pre_aggregated": True,
+        "pre_aggregated_count": len(contribs),
+    }
+
+
 def pre_aggregate_small_contributions(contributions):
     """
     Contributions below PRE_AGGREGATE_THRESHOLD are grouped by employer (or contributor_name
@@ -39,35 +76,60 @@ def pre_aggregate_small_contributions(contributions):
 
     by_group = defaultdict(list)
     for contrib in small:
-        employer = (contrib.get("contributor_employer") or "").strip().upper()
-        if not employer or employer == "N/A":
-            employer = (contrib.get("contributor_name") or "UNKNOWN").strip().upper()
-        by_group[employer].append(contrib)
+        by_group[aggregate_group_key(contrib)].append(contrib)
 
-    aggregated = []
-    for group_name, contribs in by_group.items():
-        most_recent_date = max(
-            (c.get("contribution_receipt_date") or "" for c in contribs), default=""
-        )
-        # Use the most common line_number to preserve transfer-vs-contribution classification
-        line_numbers = [c.get("line_number") for c in contribs if c.get("line_number")]
-        line_number = max(set(line_numbers), key=line_numbers.count) if line_numbers else None
-
-        aggregated.append({
-            "contributor_name": group_name,
-            "contributor_employer": group_name,
-            "entity_type": "ORG",
-            "contribution_receipt_amount": round(
-                sum(c["contribution_receipt_amount"] for c in contribs), 2
-            ),
-            "contribution_receipt_date": most_recent_date,
-            "line_number": line_number,
-            "transaction_id": f"empgroup_{group_name}",
-            "pre_aggregated": True,
-            "pre_aggregated_count": len(contribs),
-        })
+    aggregated = [
+        build_aggregate_record(group_name, contribs)
+        for group_name, contribs in by_group.items()
+    ]
 
     return large + aggregated
+
+
+def merge_incremental_contributions(old_transactions, new_contributions):
+    """
+    Fold newly-fetched raw contributions into the already-stored (aggregated) transaction list,
+    so an incremental run doesn't have to re-fetch and re-aggregate a committee's full history.
+
+    Large contributions (>= PRE_AGGREGATE_THRESHOLD) are appended as individual records. Small
+    ones are folded into their employer's aggregate: an existing empgroup_ record has its amount,
+    count, and most-recent-date updated; otherwise a new aggregate is created. The aggregate's
+    line_number can drift slightly between full refreshes (we can't recompute the true mode without
+    the original raw rows); the periodic --full-contributions run rebuilds it exactly.
+    """
+    by_id = {t["transaction_id"]: t for t in old_transactions}
+
+    small = [c for c in new_contributions if c["contribution_receipt_amount"] < PRE_AGGREGATE_THRESHOLD]
+    large = [c for c in new_contributions if c["contribution_receipt_amount"] >= PRE_AGGREGATE_THRESHOLD]
+
+    by_group = defaultdict(list)
+    for contrib in small:
+        by_group[aggregate_group_key(contrib)].append(contrib)
+
+    for group_name, contribs in by_group.items():
+        agg_id = f"empgroup_{group_name}"
+        existing = by_id.get(agg_id)
+        if existing and existing.get("pre_aggregated"):
+            existing["contribution_receipt_amount"] = round(
+                existing["contribution_receipt_amount"]
+                + sum(c["contribution_receipt_amount"] for c in contribs),
+                2,
+            )
+            existing["pre_aggregated_count"] = (
+                existing.get("pre_aggregated_count", 0) + len(contribs)
+            )
+            new_date = max(
+                (c.get("contribution_receipt_date") or "" for c in contribs), default=""
+            )
+            if new_date > (existing.get("contribution_receipt_date") or ""):
+                existing["contribution_receipt_date"] = new_date
+        else:
+            by_id[agg_id] = build_aggregate_record(group_name, contribs)
+
+    for contrib in large:
+        by_id[contrib["transaction_id"]] = contrib
+
+    return list(by_id.values())
 
 
 def get_ids_to_omit(contribs):
@@ -121,30 +183,96 @@ def should_omit(contrib, other_contribs, ids_to_omit):
     return False
 
 
-def update_committee_contributions(db, session):
+def _normalize_efiled(picked):
+    """Apply efile-specific cleanup (efilings are lowercased and have trailing commas)."""
+    picked["efiled"] = True
+    # Name/employer/etc fields are lowercased in efilings data, so uppercase them for consistency.
+    for key in CONTRIBUTION_FIELDS[:7]:
+        if key in picked and isinstance(picked[key], str):
+            picked[key] = picked[key].upper()
+    # When the contributor name is a company, it has trailing commas. Strip them.
+    picked["contributor_name"] = picked["contributor_name"].strip(",")
+    return picked
+
+
+def update_committee_contributions(db, session, full=False):
     """
     This stores contributions (with a trimmed set of fields) in the "rawContributions" collection in Firestore. Those
     contributions will later be processed in process_committee_contributions.py into a format that saves computation
     on the frontend (doing rollups, redactions, etc.)
 
     This function fetches both processed and efiled contributions.
+
+    By default the run is INCREMENTAL: contributions are sorted newest-first, so once we've seen
+    EARLY_STOP_PATIENCE consecutive pages containing no transaction IDs we don't already have stored,
+    we stop paginating and merge the newly-found transactions into the existing document. This keeps a
+    routine run to a handful of requests per committee instead of re-walking the full two-year history.
+
+    Pass full=True (the --full-contributions flag) to force a complete re-fetch and overwrite. That
+    rebuilds the aggregates exactly and reconciles amendments/deletions to old transactions that an
+    incremental run can't see; run it periodically.
     """
 
     committee_ids = [committee["id"] for committee in db.committees.values()]
     new_contributions = {}
     for committee_id in committee_ids:
-        contributions = []
-        last_index = None
-        last_contribution_receipt_date = None
-        contribs_count = 0
-        contrib_ids = set()
+        old = (
+            db.client.collection("rawContributions")
+            .document(committee_id)
+            .get()
+            .to_dict()
+        )
+        if old:
+            old_transactions = old.get("transactions", [])
+            old_known_ids = set(
+                old.get(
+                    "known_transaction_ids",
+                    [x["transaction_id"] for x in old_transactions],
+                )
+            )
+        else:
+            old_transactions = []
+            old_known_ids = set()
+
+        had_old_doc = old is not None
+        # An incremental run only makes sense when we have a baseline to diff against.
+        incremental = not full and bool(old_known_ids)
+
+        fetched = []  # contributions kept this run (everything if full; only-new if incremental)
+        fetched_ids = set()  # transaction ids seen this run (for cross-page dedup)
         ids_to_omit = (
             set(db.duplicate_contributions[committee_id])
             if committee_id in db.duplicate_contributions
             else set()
         )
 
+        def handle_page(results, efiled):
+            """Process one page of results. Returns True if the page held no new transaction IDs."""
+            ids_to_omit.update(get_ids_to_omit(results))
+            page_has_new = False
+            for contrib in results:
+                tid = contrib["transaction_id"]
+                if tid not in old_known_ids:
+                    page_has_new = True
+                if should_omit(contrib, fetched_ids, ids_to_omit):
+                    continue
+                # In incremental mode, skip transactions we've already stored — but still
+                # record the id so should_omit's cross-page dedup keeps working.
+                if incremental and tid in old_known_ids:
+                    fetched_ids.add(tid)
+                    continue
+                picked = pick(contrib, CONTRIBUTION_FIELDS)
+                if efiled:
+                    _normalize_efiled(picked)
+                fetched.append(picked)
+                fetched_ids.add(tid)
+            return not page_has_new
+
         # First fetch processed contributions
+        last_index = None
+        last_contribution_receipt_date = None
+        contribs_count = 0
+        dry_streak = 0
         while True:
             data = FEC_fetch(
                 session,
@@ -164,15 +292,12 @@ def update_committee_contributions(db, session):
                 continue
 
             contribs_count += data["pagination"]["per_page"]
-            results = data["results"]
-            ids_to_omit = ids_to_omit.union(get_ids_to_omit(results))
-            # TODO Edge case with duplicates that exist across pages?
+            page_dry = handle_page(data["results"], efiled=False)
 
-            for contrib in results:
-                if should_omit(contrib, contrib_ids, ids_to_omit):
-                    continue
-                contributions.append(pick(contrib, CONTRIBUTION_FIELDS))
-                contrib_ids.add(contrib["transaction_id"])
+            if incremental:
+                dry_streak = dry_streak + 1 if page_dry else 0
+                if dry_streak >= EARLY_STOP_PATIENCE:
+                    break
 
             # Fetch more pages if they exist, or break
             if contribs_count >= data["pagination"]["count"]:
@@ -186,6 +311,7 @@ def update_committee_contributions(db, session):
         # Now fetch efiled contributions that may have not yet been processed
         page = 1
         contribs_count = 0
+        dry_streak = 0
         while True:
             data = FEC_fetch(
                 session,
@@ -204,22 +330,12 @@ def update_committee_contributions(db, session):
                 continue
 
             contribs_count += data["pagination"]["per_page"]
-            results = data["results"]
-            ids_to_omit = ids_to_omit.union(get_ids_to_omit(results))
-            for contrib in results:
-                if should_omit(contrib, contrib_ids, ids_to_omit):
-                    continue
-                picked = pick(contrib, CONTRIBUTION_FIELDS)
-                picked["efiled"] = True
+            page_dry = handle_page(data["results"], efiled=True)
 
-                # Name/employer/etc fields are lowercased in efilings data, so uppercase them for consistency.
-                for key in CONTRIBUTION_FIELDS[:7]:
-                    if key in picked and isinstance(picked[key], str):
-                        picked[key] = picked[key].upper()
-
-                # When the contributor name is a company, it has trailing commas. Strip them.
-                picked["contributor_name"] = picked["contributor_name"].strip(",")
-                contributions.append(picked)
+            if incremental:
+                dry_streak = dry_streak + 1 if page_dry else 0
+                if dry_streak >= EARLY_STOP_PATIENCE:
+                    break
 
             # Fetch more pages if they exist, or break
             if page >= data["pagination"]["pages"]:
@@ -227,36 +343,29 @@ def update_committee_contributions(db, session):
             else:
                 page += 1
 
-        # Pre-aggregate small contributions before storing to stay under Firestore's 1MB limit.
-        # Keep the original contributions list for diff lookups below.
-        contributions_for_storage = pre_aggregate_small_contributions(contributions)
+        # Record genuinely new transactions (for the run's new-contribution count). As before,
+        # only diff against a committee that already had a stored document.
+        if had_old_doc:
+            for contrib in fetched:
+                if contrib["transaction_id"] not in old_known_ids:
+                    new_contributions[contrib["transaction_id"]] = contrib
 
-        # Diff with previously stored transactions and store any new transactions.
-        # Use known_transaction_ids (stored alongside the doc) so that real transaction
-        # IDs are preserved even after small contributions are folded into agg_ records.
-        old = (
-            db.client.collection("rawContributions")
-            .document(committee_id)
-            .get()
-            .to_dict()
-        )
-        if old:
-            old_known_ids = set(
-                old.get(
-                    "known_transaction_ids",
-                    [x["transaction_id"] for x in old["transactions"]],
-                )
+        # Build the document. Incremental merges new transactions into the stored aggregates;
+        # full re-aggregates everything from scratch. known_transaction_ids is stored alongside so
+        # real IDs survive even after small contributions are folded into empgroup_ records.
+        if incremental:
+            transactions_for_storage = merge_incremental_contributions(
+                old_transactions, fetched
             )
-            diff_ids = contrib_ids.difference(old_known_ids)
-            if diff_ids:
-                for diff_id in diff_ids:
-                    new_contributions[diff_id] = next(
-                        x for x in contributions if x["transaction_id"] == diff_id
-                    )
+            known_ids = old_known_ids.union(fetched_ids)
+        else:
+            transactions_for_storage = pre_aggregate_small_contributions(fetched)
+            known_ids = set(fetched_ids)
+
         db.client.collection("rawContributions").document(committee_id).set(
             {
-                "transactions": contributions_for_storage,
-                "known_transaction_ids": list(contrib_ids),
+                "transactions": transactions_for_storage,
+                "known_transaction_ids": list(known_ids),
             }
         )
     return new_contributions

@@ -3,6 +3,11 @@ from firebase_admin import credentials
 from google.cloud import firestore
 import re
 
+import firestore_compat
+
+# Patch around a firestore .stream() bug that crashes on a stale gRPC channel. See module docstring.
+firestore_compat.apply()
+
 
 class Database:
     def __init__(self):

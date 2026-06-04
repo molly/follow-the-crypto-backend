@@ -330,7 +330,7 @@ def summarize_recipients(db):
             x[0] != "C"
             and x not in candidates_with_expenditures_ids
             and recipients[x].get("candidate_details", {}).get("isRunningThisCycle", False)
-            and recipients[x].get("total", 0) > 0
+            and has_significant_direct_support(recipients[x])
         )
     ]
 

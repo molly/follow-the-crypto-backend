@@ -10,7 +10,11 @@ from process_committee_contributions import process_committee_contributions as p
 )
 def fetch_committee_contributions(context):
     """Fetch raw committee contributions from FEC API."""
-    new_contributions = update_committee_contributions(context.db, context.session)
+    new_contributions = update_committee_contributions(
+        context.db,
+        context.session,
+        full=getattr(context, "full_contributions", False),
+    )
     return {"new_contributions_count": len(new_contributions)}
 
 

@@ -4,9 +4,43 @@ import logging
 import os
 import re
 import requests
+import threading
+import time
 from unidecode import unidecode
 
 logging.getLogger("backoff").addHandler(logging.StreamHandler())
+
+# The FEC API limits this key to 60 requests/minute (shared across every
+# endpoint). The contribution/expenditure fetch loops paginate with no spacing,
+# so they blow past that ceiling and get 429'd. Space live requests out to stay
+# safely under the limit. Cache hits don't touch the network, so they're exempt.
+_FEC_MIN_INTERVAL_SECONDS = 60.0 / 35  # <=35 live calls/min, real headroom under the 60 cap
+_fec_throttle_lock = threading.Lock()
+_fec_last_request_time = 0.0
+
+
+def _fec_throttle():
+    """Block until at least _FEC_MIN_INTERVAL_SECONDS has passed since the last live call."""
+    global _fec_last_request_time
+    with _fec_throttle_lock:
+        wait = _FEC_MIN_INTERVAL_SECONDS - (time.monotonic() - _fec_last_request_time)
+        if wait > 0:
+            time.sleep(wait)
+        _fec_last_request_time = time.monotonic()
+
+
+def _fec_response_is_cached(session, url, params, headers):
+    """True if a CachedSession already has this request stored (so it won't hit the network)."""
+    cache = getattr(session, "cache", None)
+    if cache is None:
+        return False
+    try:
+        prepared = session.prepare_request(
+            requests.Request("GET", url, params=params, headers=headers)
+        )
+        return cache.contains(request=prepared)
+    except Exception:
+        return False
 
 
 def pick(d, keys):
@@ -82,35 +116,66 @@ def fatal_code(e):
         return False
 
 
+def fec_retry_interval(e):
+    """
+    How long to wait before retrying a failed FEC request.
+
+    On a 429, honor the server's Retry-After header if present; otherwise wait out
+    the full rate-limit window (the limit is per-minute). Other transient errors
+    (timeouts, dropped connections) get a short constant wait.
+    """
+    resp = getattr(e, "response", None)
+    if resp is not None:
+        retry_after = resp.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return min(float(retry_after), 120)
+            except ValueError:
+                pass
+        if resp.status_code == 429:
+            # No Retry-After header: the limit is a rolling per-minute window that
+            # replenishes continuously, so a short wait is enough to recover.
+            return 15
+    return 20
+
+
 def chunk(lst, chunk_size=10):
     for i in range(0, len(lst), chunk_size):
         yield lst[i : i + chunk_size]
 
 
 @backoff.on_exception(
-    backoff.constant,
+    backoff.runtime,
     (
         requests.exceptions.RequestException,
         requests.exceptions.ConnectionError,
         requests.exceptions.HTTPError,
         requests.exceptions.Timeout,
     ),
-    interval=20,
-    max_tries=5,
+    value=fec_retry_interval,
+    max_tries=8,
     giveup=fatal_code,
 )
 def FEC_fetch(session, description, url, params={}):
     headers = {}
     if "efile" in url:
         headers["Cache-Control"] = "no-cache"
+    full_params = {
+        **params,
+        "api_key": os.environ["FEC_API_KEY"],
+    }
+    # Only throttle requests that will actually reach the FEC; cached responses
+    # don't count against the rate limit.
+    if not _fec_response_is_cached(session, url, full_params, headers):
+        _fec_throttle()
     r = session.get(
         url,
-        params={
-            **params,
-            "api_key": os.environ["FEC_API_KEY"],
-        },
+        params=full_params,
         headers=headers,
-        timeout=30,
+        # Heavy schedule_a queries (full two-year period + sort) can take well over
+        # 30s; too short a timeout makes them retry, and a timed-out request still
+        # counts against the rate limit, so short timeouts feed a 429 death spiral.
+        timeout=60,
     )
     if r.status_code == 404:
         return None

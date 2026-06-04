@@ -86,6 +86,39 @@ def generate_race_key(race: Dict[str, Any]) -> str:
     return f"{race_type}-{party}-{date}"
 
 
+def meaningful_races_signature(races: List[Dict[str, Any]]) -> frozenset:
+    """
+    Build an order-independent signature of the parts of a scraped races list
+    that warrant human review.
+
+    Two scrapes with the same signature describe the same set of subraces, the
+    same candidates in each, and the same outcomes — only re-review-worthy
+    changes (a new subrace, a new candidate, or a changed result) alter it.
+    Volatile presentational fields like vote percentages are intentionally
+    excluded so that re-scraping unchanged data does not re-flag a race.
+
+    Args:
+        races: A scrapedRaces-style list of race dicts.
+
+    Returns:
+        A frozenset usable for equality comparison between two scrapes.
+    """
+    signature = set()
+    for race in races:
+        candidates = frozenset(
+            (candidate.get("name"), candidate.get("won"))
+            for candidate in race.get("candidates", [])
+        )
+        signature.add(
+            (
+                generate_race_key(race),
+                bool(race.get("canceled", False)),
+                candidates,
+            )
+        )
+    return frozenset(signature)
+
+
 def save_scraped_races(db_client, state: str, race_data: Dict[str, Any]) -> None:
     """
     Save scraped race data to Firestore in the scrapedRaces field.
@@ -130,10 +163,22 @@ def save_scraped_races(db_client, state: str, race_data: Dict[str, Any]) -> None
         reviewed_races = existing_group.get('races', [])
         manual_races_updated = existing_group.get('manualRacesUpdated', 0)
         last_reviewed = existing_group.get('lastReviewed', 0)
+        existing_scraped_races = existing_group.get('scrapedRaces', [])
+        existing_scraped_updated = existing_group.get('scrapedRacesUpdated', 0)
 
-        # Save scraped data to scrapedRaces field
+        # Save scraped data to scrapedRaces field. Only advance the
+        # scrapedRacesUpdated timestamp — which is what re-flags the race for
+        # review — when the scrape's review-worthy content (subraces, candidates,
+        # outcomes) actually changed. Re-scraping identical data preserves the
+        # prior timestamp so an already-reviewed race does not reappear.
         race_group['scrapedRaces'] = scraped_races
-        race_group['scrapedRacesUpdated'] = current_timestamp
+        if (
+            meaningful_races_signature(scraped_races)
+            == meaningful_races_signature(existing_scraped_races)
+        ):
+            race_group['scrapedRacesUpdated'] = existing_scraped_updated
+        else:
+            race_group['scrapedRacesUpdated'] = current_timestamp
 
         # Preserve manualRaces field if it exists
         if manual_races:

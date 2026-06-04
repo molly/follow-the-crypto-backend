@@ -176,18 +176,18 @@ def process_contribution(contrib, db, donorMap):
         if company["name"].upper() == group or any(
             alias.upper() == group for alias in company.get("aliases", [])
         ):
-            link = "/companies/" + company["id"]
+            link = "/2026/companies/" + company["id"]
             break
     if not link:
         for committee in db.committees.values():
             if committee["name"].upper() == group:
-                link = "/committees/" + committee["id"]
+                link = "/2026/committees/" + committee["id"]
                 break
     if not link:
         if "," in group:
             for individual in db.individuals.values():
                 if compare_names_lastfirst(individual["name"], group):
-                    link = "/individuals/" + individual["id"]
+                    link = "/2026/individuals/" + individual["id"]
                     break
 
     if link:

@@ -1,4 +1,4 @@
-from states import SPECIAL_ELECTIONS
+from states import SPECIAL_ELECTIONS, CURRENT_CYCLE
 from utils import get_sector_keys
 
 
@@ -23,13 +23,19 @@ def get_race_name(expenditure):
         and int(expenditure["candidate_office_district"]) != 0
     ):
         race += "-" + expenditure["candidate_office_district"]
-    election_type = expenditure.get("election_type") or ""
-    # Only append "-special" when the race is a known special election.
-    # election_type "S..." means "special" in FEC data, but filers sometimes use
-    # it for regular-cycle candidates, which would create spurious special-election
-    # entries.  Gating on SPECIAL_ELECTIONS prevents that.
-    if election_type.startswith("S") and race in SPECIAL_ELECTIONS:
-        race += "-special"
+    entry = SPECIAL_ELECTIONS.get(race)
+    if entry:
+        election_type = expenditure.get("election_type") or ""
+        # A current-cycle special-only seat has no regular contest, so every
+        # expenditure there is the special regardless of how the filer coded
+        # election_type. For seats that also hold a regular election (or whose
+        # special is historical), trust the FEC election_type: "S..." means
+        # "special". Gating on SPECIAL_ELECTIONS membership avoids creating
+        # spurious special entries from misfiled election_types elsewhere.
+        if entry["year"] == CURRENT_CYCLE and not entry["has_regular"]:
+            race += "-special"
+        elif election_type.startswith("S"):
+            race += "-special"
     return race
 
 

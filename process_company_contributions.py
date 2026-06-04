@@ -1,6 +1,10 @@
 from get_missing_recipients import get_missing_recipient_data
 from process_individual_contributions import handle_memo_items
-from recipient_utils import get_all_recipients, set_all_recipients
+from recipient_utils import (
+    get_all_recipients,
+    resolve_recipient_party,
+    set_all_recipients,
+)
 from utils import compare_names_lastfirst, get_sector_keys, pick
 
 ROLLUP_THRESHOLD = 10000
@@ -178,14 +182,46 @@ def process_company_contributions(db, session):
             if ind_doc.exists:
                 individuals_data[ind_doc.id] = ind_doc.to_dict()
 
-    # Summarize spending by party
+    # Reverse index of reported (dark-money) gifts: donor company -> total amount.
+    # `knownDonors` is hand-curated onto each non-disclosing RECIPIENT's constant
+    # (e.g. public-first-action), so to surface a gift as the DONOR's spending we
+    # invert it. Only entries that point at a tracked company (idType defaults to
+    # "company") can be attributed; name-only entries have no donor page to credit.
+    reported_by_company = {}
+    for recipient_const in db.companies.values():
+        for donor in recipient_const.get("knownDonors", []) or []:
+            donor_id = donor.get("id")
+            if not donor_id or donor.get("idType", "company") != "company":
+                continue
+            reported_by_company[donor_id] = reported_by_company.get(
+                donor_id, 0
+            ) + (donor.get("amount") or 0)
+
+    # Summarize spending by party. `total`/`reported` are kept distinct: reported
+    # dark-money gifts often pass through tracked recipients that ALSO appear in
+    # these sums via their own FEC outbound, so blending the two into one grand
+    # figure would double-count the pass-through. Per-company `total` folds them in
+    # (a single company can't double-count itself); the roll-ups keep them apart.
     all_companies_total = 0
+    all_companies_fec_total = 0
+    all_companies_reported = 0
+    all_companies_to_tracked = 0
     all_companies_by_party = {}
     all_companies_by_company = {}
     sector_companies_data = {
-        "crypto": {"total": 0, "by_party": {}, "by_company": {}},
-        "ai": {"total": 0, "by_party": {}, "by_company": {}},
+        "crypto": {
+            "total": 0, "fec_total": 0, "reported": 0,
+            "to_tracked": 0, "by_party": {}, "by_company": {},
+        },
+        "ai": {
+            "total": 0, "fec_total": 0, "reported": 0,
+            "to_tracked": 0, "by_party": {}, "by_company": {},
+        },
     }
+    # Committees the site actively tracks (keys of constants/committees). A
+    # contribution counts as "to a tracked committee" if its recipient is in
+    # this set — same definition used for is_tracked in pacs.py.
+    tracked_committee_ids = set(db.committees.keys()) if db.committees else set()
     # Track individual contribution transaction IDs that have already been attributed
     # to a company, to prevent double-counting when an individual is associated with
     # multiple companies (e.g. a founder of two related companies).
@@ -372,37 +408,40 @@ def process_company_contributions(db, session):
         ]
 
         party_summary = {}
+        to_tracked = 0
         for committee_id, group_data in contributions.items():
+            if committee_id in tracked_committee_ids:
+                to_tracked += group_data["total"]
             party = "UNK"
             if committee_id in recipients:
                 committee = recipients[committee_id]
-                if (
-                    "party" in committee
-                    and committee["party"] is not None
-                    and not committee["party"].startswith("N")
-                ):
-                    party = committee["party"]
-                else:
-                    parties = [
-                        c.get("party")
-                        for c in committee["candidate_details"].values()
-                        if c.get("party") is not None
-                    ]
-                    if len(set(parties)) == 1 and not parties[0].startswith("N"):
-                        party = parties[0]
+                party = resolve_recipient_party(committee)
                 recipient_data = {k: committee[k] for k in recipient_embed_keys if k in committee}
                 group_data["recipient"] = recipient_data
             if party not in party_summary:
                 party_summary[party] = 0
             party_summary[party] += group_data["total"]
 
-        company_total = sum(party_summary.values())
+        # `total` is the company's full political spending: FEC contributions plus
+        # publicly-reported dark-money gifts. `fec_total` is the FEC-only portion
+        # that `by_party` reconciles to and that destination-specific breakdowns
+        # (party, flow, beneficiaries) must use — reported money has no party or
+        # tracked recipient. `reported` carries the dark-money figure on its own.
+        fec_total = sum(party_summary.values())
+        reported_total = reported_by_company.get(company_id, 0)
+        company_total = fec_total + reported_total
         company_entry = {
             "total": round(company_total, 2),
+            "fec_total": round(fec_total, 2),
+            "reported": round(reported_total, 2),
+            "to_tracked": round(to_tracked, 2),
             "by_party": {k: round(v, 2) for k, v in party_summary.items()},
         }
         all_companies_by_company[company_id] = company_entry
         all_companies_total += company_total
+        all_companies_fec_total += fec_total
+        all_companies_reported += reported_total
+        all_companies_to_tracked += to_tracked
         for party, amount in party_summary.items():
             if party not in all_companies_by_party:
                 all_companies_by_party[party] = 0
@@ -415,6 +454,9 @@ def process_company_contributions(db, session):
             sector_data = sector_companies_data[key]
             sector_data["by_company"][company_id] = company_entry
             sector_data["total"] += company_total
+            sector_data["fec_total"] += fec_total
+            sector_data["reported"] += reported_total
+            sector_data["to_tracked"] += to_tracked
             for party, amount in party_summary.items():
                 if party not in sector_data["by_party"]:
                     sector_data["by_party"][party] = 0
@@ -432,11 +474,17 @@ def process_company_contributions(db, session):
         {
             "all": {
                 "total": round(all_companies_total, 2),
+                "fec_total": round(all_companies_fec_total, 2),
+                "reported": round(all_companies_reported, 2),
+                "to_tracked": round(all_companies_to_tracked, 2),
                 "by_party": {k: round(v, 2) for k, v in all_companies_by_party.items()},
                 "by_company": all_companies_by_company,
             },
             "crypto": {
                 "total": round(sector_companies_data["crypto"]["total"], 2),
+                "fec_total": round(sector_companies_data["crypto"]["fec_total"], 2),
+                "reported": round(sector_companies_data["crypto"]["reported"], 2),
+                "to_tracked": round(sector_companies_data["crypto"]["to_tracked"], 2),
                 "by_party": {
                     k: round(v, 2)
                     for k, v in sector_companies_data["crypto"]["by_party"].items()
@@ -445,6 +493,9 @@ def process_company_contributions(db, session):
             },
             "ai": {
                 "total": round(sector_companies_data["ai"]["total"], 2),
+                "fec_total": round(sector_companies_data["ai"]["fec_total"], 2),
+                "reported": round(sector_companies_data["ai"]["reported"], 2),
+                "to_tracked": round(sector_companies_data["ai"]["to_tracked"], 2),
                 "by_party": {
                     k: round(v, 2)
                     for k, v in sector_companies_data["ai"]["by_party"].items()

@@ -1,7 +1,11 @@
 import logging
 import re
 from get_missing_recipients import get_missing_recipient_data
-from recipient_utils import get_all_recipients, set_all_recipients
+from recipient_utils import (
+    get_all_recipients,
+    resolve_recipient_party,
+    set_all_recipients,
+)
 
 
 def all_unique(numbers):
@@ -411,20 +415,7 @@ def process_individual_contributions(db, session):
             party = "UNK"
             if committee_id in recipients:
                 committee = recipients[committee_id]
-                if (
-                    "party" in committee
-                    and committee["party"] is not None
-                    and not committee["party"].startswith("N")
-                ):
-                    party = committee["party"]
-                else:
-                    parties = [
-                        c.get("party")
-                        for c in committee["candidate_details"].values()
-                        if c.get("party") is not None
-                    ]
-                    if len(set(parties)) == 1 and not parties[0].startswith("N"):
-                        party = parties[0]
+                party = resolve_recipient_party(committee)
                 recipient_data = {k: committee[k] for k in recipient_embed_keys if k in committee}
                 enriched_contributions.append({**group_data, "recipient": recipient_data})
             else:

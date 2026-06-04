@@ -1,4 +1,3 @@
-from datetime import date, timedelta
 import logging
 import re
 from utils import FEC_fetch, compare_names, get_expenditure_race_type, get_sector_keys
@@ -6,16 +5,6 @@ from states import SINGLE_MEMBER_STATES
 from unidecode import unidecode
 from race_utils import get_all_races, update_race
 from recipient_utils import has_significant_direct_support
-
-RACE_PRIORITY = {
-    "general": 0,
-    "general_runoff": 1,
-    "primary_runoff": 2,
-    "primary": 3,
-    "convention": 4,
-    None: 5,
-}
-
 
 def trim_name(name):
     m = re.match(r"^(.+)(\s(?:[SJ]r\.?|IX|IV|V?I{0,3}))$", name)
@@ -27,43 +16,6 @@ def trim_name(name):
         # FEC API won't accept queries of < 3 characters, so short names like "Xu" throw errors
         return unidecode(name)
     return unidecode(last_name)
-
-
-def sort_candidates(candidates):
-    # 1. If defeated: false, sort by party, putting "DEM" or "REP" ahead of any third parties or undefined.
-    # 2. If defeated: true, sort by defeated_race by RACE_PRIORITY
-    # 3. If two defeated candidates have the same defeated_race, sort by whichever candidate has the higher
-    #    support_total + oppose_total
-    def sort_key(candidate):
-        name, data = candidate
-        defeated = data.get("defeated", False)
-        party = data.get("party", [])
-        defeated_race = data.get("defeated_race")
-        total_support = data.get("support_total", 0) + data.get("oppose_total", 0)
-
-        if not defeated:
-            party_order = {"D": 0, "R": 1}.get(party[0] if party else "", 2)
-            return 0, party_order, 0
-        else:
-            race_order = RACE_PRIORITY.get(defeated_race, 4)
-            return 1, race_order, -total_support
-
-    sorted_candidates = sorted(candidates.items(), key=sort_key)
-    return [name for name, _ in sorted_candidates]
-
-
-def get_last_index_with_donation(sorted_candidates, candidates_data):
-    for i in range(len(sorted_candidates) - 1, -1, -1):
-        candidate_name = sorted_candidates[i]
-        if candidate_name in candidates_data:
-            candidate = candidates_data[candidate_name]
-            if (
-                candidate.get("support_total", 0) != 0
-                or candidate.get("oppose_total", 0) != 0
-                or candidate.get("defeated", False) is False
-            ):
-                return i
-    return -1
 
 
 def summarize_races(db, session):
@@ -133,7 +85,6 @@ def summarize_races(db, session):
                     "crypto_oppose_total": 0,
                     "ai_oppose_total": 0,
                     "races": [],  # Sub-races in which this person was a candidate
-                    "defeated_race": None,  # Race in which this candidate was defeated
                 }
                 for candidate in candidates
             }
@@ -188,6 +139,15 @@ def summarize_races(db, session):
 
             # Map FEC candidate names to formatted candidate names (which are being used as keys)
             names = {}
+            # Per matched candidate: whether the FEC result we assigned agreed on
+            # the first name, and which FEC name it was. The surname search returns
+            # everyone of that surname who ever filed in the district, so when a
+            # candidate has a single same-surname match in our set we must still
+            # prefer the first-name match — otherwise a different person sharing the
+            # surname (e.g. Jimih Jones, returned alongside the Eric Jones actually
+            # running in CA-04) clobbers the correct match on last-write-wins.
+            matched_first_name = {}
+            assigned_fec_name = {}
             # Add relevant FEC data to candidate data
             for FEC_candidate_data in FEC_candidates_data["results"]:
                 # Try to match FEC candidate result to candidate in our data
@@ -218,6 +178,28 @@ def summarize_races(db, session):
                         f"Having trouble locating FEC candidate in candidates data: {first_name} {last_name} in {state} {race_id}"
                     )
                     continue
+
+                # When a candidate has a single same-surname match, the surname
+                # check above can't tell two people apart, so verify the first name
+                # before letting this result overwrite an existing one. A result
+                # whose first name matches always wins over one that doesn't; among
+                # equally-(un)matched results, last-write-wins as before.
+                first_name_matches = bool(
+                    first_name and compare_names(first_name, candidate_race_name)
+                )
+                if (
+                    candidates_data[candidate_race_name].get("candidate_id") is not None
+                    and matched_first_name.get(candidate_race_name)
+                    and not first_name_matches
+                ):
+                    continue
+                # If this result supersedes a prior, worse match, drop the prior
+                # FEC name's stale mapping so it can't misroute an expenditure.
+                prev_fec_name = assigned_fec_name.get(candidate_race_name)
+                if prev_fec_name is not None and prev_fec_name in names:
+                    del names[prev_fec_name]
+                matched_first_name[candidate_race_name] = first_name_matches
+                assigned_fec_name[candidate_race_name] = FEC_candidate_data["name"]
 
                 # Map FEC name to common name
                 names[FEC_candidate_data["name"]] = candidate_race_name
@@ -288,23 +270,7 @@ def summarize_races(db, session):
                         ] = True
 
             # Iterate through each subrace
-            for ind, race in enumerate(race_data["races"]):
-                is_upcoming = None
-                has_winner = any("won" in candidate for candidate in race["candidates"])
-                if "date" in race and race["date"]:
-                    race_date = date.fromisoformat(race["date"])
-                    if race_date > date.today():
-                        # Race is happening sometime in the future.
-                        is_upcoming = True
-                    elif (
-                        race_date > (date.today() - timedelta(days=7))
-                        and not has_winner
-                    ):
-                        # Race happened within the last week, but outcome has not been announced.
-                        is_upcoming = True
-                    else:
-                        is_upcoming = False
-
+            for race in race_data["races"]:
                 # Iterate through each candidate in the subrace. These should generally be in reverse chrono order.
                 for candidate in race["candidates"]:
                     # Add this subrace to their list of involved races
@@ -322,39 +288,10 @@ def summarize_races(db, session):
                         and "party" in candidate
                     ):
                         candidates_data[candidate["name"]]["party"] = candidate["party"]
-                    if is_upcoming is True or (
-                        "won" in candidate
-                        and candidate["won"] is True
-                        and "defeated" not in candidates_data[candidate["name"]]
-                    ):
-                        # If the candidate is involved in a race that's still upcoming
-                        #   OR this is the most recent race, and they won it, mark them as not defeated
-                        candidates_data[candidate["name"]]["defeated"] = False
-                    elif (
-                        "won" in candidate
-                        and candidate["won"] is False
-                        and "defeated" not in candidates_data[candidate["name"]]
-                    ):
-                        # If this race already happened
-                        #   AND the candidate is not listed in a more recent or upcoming race*
-                        #   AND candidate has the "won" field set to False for this race, mark them as defeated
-                        #
-                        # * It is possible for a candidate to lose a race and still be listed in a more recent or
-                        #   upcoming race, for example as a write-in or because they secured enough signatures
-                        #   despite not progressing through the convention vote.
-                        candidates_data[candidate["name"]]["defeated"] = True
-
-                        # If they lost, and they do not already have a race listed in their defeated races list,
-                        # mark this as the defeated race because it was the most advanced race in which they
-                        # participated.
-                        if "defeated_race" not in candidates_data[
-                            candidate["name"]
-                        ] or (
-                            candidates_data[candidate["name"]]["defeated_race"] is None
-                        ):
-                            candidates_data[candidate["name"]]["defeated_race"] = race.get(
-                                "type"
-                            )
+                    # Win/loss is intentionally not stored on the summary: the
+                    # frontend derives it from the per-race `won` flags (see
+                    # isDefeated / getMostRecentRaceResult), which stay correct
+                    # when races are edited manually between summarize runs.
                     if "declined" in candidate and candidate["declined"] is True:
                         candidates_data[candidate["name"]]["declined"] = True
                         if "declinedReason" in candidate:
