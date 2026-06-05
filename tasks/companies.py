@@ -10,7 +10,9 @@ from process_company_contributions import process_company_contributions as proce
 )
 def fetch_company_spending(context):
     """Fetch company spending data."""
-    update_spending_by_company(context.db, context.session)
+    update_spending_by_company(
+        context.db, context.session, full=getattr(context, "full_fetch", False)
+    )
     return {"status": "success"}
 
 

@@ -1,6 +1,7 @@
 from collections import defaultdict
 from recipient_utils import get_all_recipients
-from states import canonical_race_keys
+from race_utils import get_all_races
+from states import canonical_race_keys, SINGLE_MEMBER_STATES
 
 
 def get_race_id(candidate):
@@ -16,6 +17,50 @@ def get_race_id(candidate):
     return race_id
 
 
+def candidate_roster_status(all_races, candidate, candidate_id):
+    """Return ``(roster_exists, on_roster)`` for the candidate's own seat, checking
+    both the regular and special 2026 rosters.
+
+    The roster is the authoritative "running this cycle" signal and is consulted
+    live here rather than trusting the recipient's stored ``isRunningThisCycle``
+    flag, which can be stale: that flag is computed once when a committee is first
+    hydrated and is never refreshed when the regular roster later appears or FEC
+    election_years catch up.
+
+    raceDetails only contains *tracked* (contested/notable) races, so a missing
+    roster means the seat simply isn't individually tracked -- NOT that the
+    candidate is illegitimate. Callers therefore treat roster data as disqualifying
+    only when a roster actually exists for the seat and omits the candidate.
+    """
+    state = candidate.get("state")
+    office = candidate.get("office")
+    if not state or not office:
+        return (False, False)
+    state_races = all_races.get(state, {})
+    if office == "S":
+        base_key = "S"
+    elif office == "H":
+        district = "01" if state in SINGLE_MEMBER_STATES else candidate.get("district")
+        if not district:
+            return (False, False)
+        base_key = f"H-{district}"
+    else:
+        return (False, False)
+    roster_exists = False
+    on_roster = False
+    for race_key in (base_key, f"{base_key}-special"):
+        race = state_races.get(race_key)
+        if not race or "candidates" not in race:
+            continue
+        roster_exists = True
+        if any(
+            candidate_id == c.get("candidate_id")
+            for c in race["candidates"].values()
+        ):
+            on_roster = True
+    return (roster_exists, on_roster)
+
+
 def compute_company_state_spending(db):
     """Compute company spending by state based on recipient candidate associations.
 
@@ -29,6 +74,11 @@ def compute_company_state_spending(db):
     """
     # Load recipient data (maps committee_id -> candidate_details with state info)
     all_recipients = get_all_recipients(db)
+
+    # Load the authoritative 2026 race rosters ({state: {race_key: race_data}}).
+    # Used to classify "running this cycle" and to gate race attribution, instead
+    # of trusting recipients' possibly-stale isRunningThisCycle flags.
+    all_races = get_all_races(db.client)
 
     # Load non-candidate committees to skip (same as get_beneficiaries)
     non_candidate_committees = db.non_candidate_committees or set()
@@ -86,7 +136,12 @@ def compute_company_state_spending(db):
                 if not state:
                     continue
                 all_candidate_states.add(state)
-                if candidate.get("isRunningThisCycle", False):
+                # Roster presence is authoritative; the stored flag can be stale, so
+                # a rostered candidate counts as running even if the flag says not.
+                roster_exists, on_roster = candidate_roster_status(
+                    all_races, candidate, cid
+                )
+                if candidate.get("isRunningThisCycle", False) or on_roster:
                     # If this candidate ID is aliased, they're running under a
                     # different candidacy. Count the state so they don't appear
                     # as prior-cycle, but skip race attribution since their old
@@ -95,9 +150,15 @@ def compute_company_state_spending(db):
                         running_states.add(state)
                         continue
                     running_states.add(state)
-                    race_id = get_race_id(candidate)
-                    if race_id:
-                        running_races_by_state[state].add(race_id)
+                    # Attribute to the race unless a roster exists for the seat and
+                    # omits this candidate -- i.e. they hold or seek a seat they
+                    # aren't actually a contestant in (e.g. an incumbent running for
+                    # another office), so their money must not leak into that race's
+                    # bucket. A seat with no tracked roster keeps the old behavior.
+                    if on_roster or not roster_exists:
+                        race_id = get_race_id(candidate)
+                        if race_id:
+                            running_races_by_state[state].add(race_id)
                 else:
                     excluded_candidates_by_state[state].append({
                         "name": candidate.get("name", ""),

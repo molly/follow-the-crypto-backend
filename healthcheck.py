@@ -11,7 +11,7 @@ Sections:
   - special_election_drift   SPECIAL_ELECTIONS map vs actual buckets/details.
   - orphaned_spending        Spending with no raceDetails entry, ranked by $.
   - empty_race_details       raceDetails with spending but no candidates.
-  - stale_special_elections  SPECIAL_ELECTIONS entries with no spending / past.
+  - stale_special_elections  current-cycle SPECIAL_ELECTIONS entries with no spending.
   - orphan_expenditures      IEs visible on committee pages, hidden on race pages
                              (also covers expenditures whose candidate isn't in
                              the race roster).
@@ -27,7 +27,7 @@ import logging
 
 from states import SPECIAL_ELECTIONS, CURRENT_CYCLE
 from race_utils import get_all_races, validate_special_elections
-from recipient_utils import get_all_recipients, DIRECT_SUPPORT_TOTAL_THRESHOLD
+from recipient_utils import get_all_recipients, compute_significant_direct_support
 from diagnose_orphan_expenditures import find_orphan_expenditures
 from candidate_images import get_candidates_without_images
 
@@ -49,12 +49,17 @@ def _bucket_total(bucket):
     return 0
 
 
-def orphaned_spending(states_data, detail_ids, company_floor=DIRECT_SUPPORT_TOTAL_THRESHOLD):
+def orphaned_spending(states_data, detail_ids, significant_company_races):
     """Races with recorded spending but no raceDetails entry, ranked by $.
 
     PAC orphans (by_race) are always flagged — PAC spending should always be
-    hydrated. Company-only orphans are flagged only at/above company_floor, since
-    smaller direct-only races are excluded from scraping by design.
+    hydrated. Company-only orphans are flagged only when the race clears the
+    per-candidate direct-support gate (i.e. some candidate in it would trigger a
+    scrape, so the race *should* have a raceDetails entry). A race whose company
+    money is spread across several sub-threshold candidates is excluded from
+    scraping by design and is not an orphan, even if its race-level total is large
+    — `significant_company_races` is the set of full race ids that pass the gate,
+    computed once by compute_significant_direct_support.
     """
     pac, company = [], []
     for state, data in states_data.items():
@@ -68,10 +73,11 @@ def orphaned_spending(states_data, detail_ids, company_floor=DIRECT_SUPPORT_TOTA
         for race_id, bucket in data.get("by_race_companies", {}).items():
             if race_id in by_race:
                 continue  # already covered by the PAC bucket
-            if _short_id(state, race_id) not in have:
-                amount = _bucket_total(bucket)
-                if amount >= company_floor:
-                    company.append((race_id, amount))
+            if (
+                _short_id(state, race_id) not in have
+                and race_id in significant_company_races
+            ):
+                company.append((race_id, _bucket_total(bucket)))
     pac.sort(key=lambda x: -x[1])
     company.sort(key=lambda x: -x[1])
     return {"pac": pac, "company": company}
@@ -107,22 +113,25 @@ def stale_special_elections(states_data):
 
     no_spending: a current-cycle special seat with no spending under any of its
     canonical keys (possibly a wrong or premature entry).
-    past: entries whose year has passed (candidates for cleanup).
+
+    Past-cycle entries are intentionally NOT reported: prior-year specials stay in
+    the map on purpose (they still route and document their historical spending),
+    so flagging them only adds noise. They're skipped from the no_spending check
+    too, since "no current spending" isn't meaningful for an election that's over.
     """
-    no_spending, past = [], []
+    no_spending = []
     for seat, entry in SPECIAL_ELECTIONS.items():
+        if entry["year"] < CURRENT_CYCLE:
+            continue
         state = seat.split("-")[0]
         data = states_data.get(state, {})
         keys = set(data.get("by_race", {})) | set(data.get("by_race_companies", {}))
-        if entry["year"] < CURRENT_CYCLE:
-            past.append((seat, entry["year"]))
-            continue
         # Obsolete = no money for this seat under ANY key (regular or special).
         # Spending under the "wrong" key is a routing bug, reported as drift, not
         # an obsolete entry — so check both forms here, not just canonical keys.
         if seat not in keys and f"{seat}-special" not in keys:
             no_spending.append(seat)
-    return {"no_spending": no_spending, "past": past}
+    return {"no_spending": no_spending}
 
 
 def incomplete_committees(db):
@@ -270,7 +279,10 @@ def run_healthcheck(db, check_images=True):
     report["special_election_drift"] = validate_special_elections(
         db, detail_ids=detail_ids, states_data=states_data
     )
-    report["orphaned_spending"] = orphaned_spending(states_data, detail_ids)
+    significant_company_races = compute_significant_direct_support(db)["race_ids"]
+    report["orphaned_spending"] = orphaned_spending(
+        states_data, detail_ids, significant_company_races
+    )
     report["empty_race_details"] = empty_race_details(states_data, all_races)
     report["stale_special_elections"] = stale_special_elections(states_data)
     report["orphan_expenditures"] = find_orphan_expenditures(
@@ -324,12 +336,10 @@ def _log_report(report):
     stale = report["stale_special_elections"]
     lines.append(
         f"\nStale SPECIAL_ELECTIONS entries: "
-        f"{len(stale['no_spending'])} with no spending, {len(stale['past'])} past-year"
+        f"{len(stale['no_spending'])} with no spending"
     )
     for seat in stale["no_spending"]:
         lines.append(f"  - no spending: {seat}")
-    for seat, year in stale["past"]:
-        lines.append(f"  - past ({year}): {seat}")
 
     orph_exp = report["orphan_expenditures"]
     total_rows = sum(len(rows) for rows in orph_exp.values())
@@ -339,9 +349,25 @@ def _log_report(report):
         f"{total_rows} groups, {_money(total_amt)}"
     )
     for reason in sorted(orph_exp, key=lambda r: -sum(x["amount"] for x in orph_exp[r])):
-        rows = orph_exp[reason]
+        rows = sorted(orph_exp[reason], key=lambda x: -x["amount"])
         subtotal = sum(x["amount"] for x in rows)
         lines.append(f"  - {reason}: {len(rows)} groups, {_money(subtotal)}")
+        for r in rows:
+            # Only surface the rostered id when it differs from the expenditure's
+            # own id (the mismatch that actually hides the spending).
+            roster_id = (
+                r["roster_id"]
+                if r["roster_id"] and r["roster_id"] != r["candidate_id"]
+                else ""
+            )
+            id_part = r["candidate_id"] or "(no id)"
+            if roster_id:
+                id_part += f" -> roster {roster_id}"
+            subrace = f"/{r['subrace']}" if r["subrace"] else ""
+            lines.append(
+                f"      {r['race']}{subrace}  {r['candidate']} [{id_part}]  "
+                f"{_money(r['amount'])}  via {r['committee']}"
+            )
 
     committees = report["incomplete_committees"]
     lines.append(f"\nCommittees missing description/affiliation: {len(committees)}")
@@ -393,4 +419,4 @@ if __name__ == "__main__":
 
     _db = Database()
     _db.get_constants()
-    run_healthcheck(_db)
+    run_healthcheck(_db, False)

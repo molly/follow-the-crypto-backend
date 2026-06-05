@@ -101,6 +101,13 @@ Examples:
     )
 
     parser.add_argument(
+        "--full-fetch",
+        action="store_true",
+        help="Force ALL incremental FEC-fetch tasks (contributions, individuals, company, etc.) to "
+        "do a full re-fetch + overwrite. Use for a periodic full reconcile.",
+    )
+
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -220,6 +227,7 @@ def main():
         verbose=args.verbose,
     )
     orchestrator.context.full_contributions = args.full_contributions
+    orchestrator.context.full_fetch = args.full_fetch
 
     try:
         results = orchestrator.run(

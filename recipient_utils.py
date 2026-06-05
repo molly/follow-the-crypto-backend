@@ -31,6 +31,82 @@ def has_significant_direct_support(recipient: dict) -> bool:
     )
 
 
+def compute_significant_direct_support(db, recipients=None) -> dict:
+    """Single source of truth for the per-CANDIDATE direct-support scrape gate.
+
+    A candidate clears the gate when their total direct (company) contributions
+    reach DIRECT_SUPPORT_TOTAL_THRESHOLD, or any single contribution to them
+    reaches DIRECT_SUPPORT_CONTRIBUTOR_THRESHOLD. Returns:
+      - "candidates": canonical beneficiary ids that clear the gate.
+      - "race_ids": the full race ids (e.g. "NJ-H-07", including special variants)
+        those candidates' seats route to -- the races the scraper targets from
+        direct contributions, keyed the same way by_race_companies is.
+
+    update_race_details consumes "candidates" to choose which contributions to
+    scrape; the healthcheck consumes "race_ids" to separate a real orphan (a race
+    that should have been hydrated) from a sub-threshold company-only race that is
+    excluded from scraping by design. Keeping both in one place prevents the two
+    consumers from drifting to different thresholds.
+    """
+    # Imported lazily to avoid a module-load cycle (process_company_state_spending
+    # imports this module for get_all_recipients).
+    from utils import get_beneficiaries
+    from process_company_state_spending import get_race_id
+    from states import canonical_race_keys
+
+    if recipients is None:
+        recipients = get_all_recipients(db)
+
+    totals: dict = {}
+    max_contrib: dict = {}
+    details_by_candidate: dict = {}
+    for doc in db.client.collection("companies").stream():
+        company = doc.to_dict()
+        for group in company.get("contributions", []):
+            recipient_committee = recipients.get(group["committee_id"])
+            beneficiaries = get_beneficiaries(
+                group, recipient_committee, db.non_candidate_committees
+            )
+            for beneficiary in beneficiaries:
+                if beneficiary[0] == "C":
+                    continue
+                canonical = db.candidate_aliases.get(beneficiary, beneficiary)
+                totals[canonical] = totals.get(canonical, 0) + group["total"]
+                for contrib in group.get("contributions", []):
+                    amount = (
+                        contrib.get("total_receipt_amount")
+                        or contrib.get("contribution_receipt_amount", 0)
+                    )
+                    if amount > max_contrib.get(canonical, 0):
+                        max_contrib[canonical] = amount
+                if canonical not in details_by_candidate:
+                    cand_details = (
+                        (recipient_committee or {})
+                        .get("candidate_details", {})
+                        .get(beneficiary)
+                    )
+                    if cand_details:
+                        details_by_candidate[canonical] = cand_details
+
+    candidates = {
+        candidate
+        for candidate, total in totals.items()
+        if total >= DIRECT_SUPPORT_TOTAL_THRESHOLD
+        or max_contrib.get(candidate, 0) >= DIRECT_SUPPORT_CONTRIBUTOR_THRESHOLD
+    }
+
+    race_ids: set = set()
+    for candidate in candidates:
+        cand_details = details_by_candidate.get(candidate)
+        if not cand_details or cand_details.get("office") not in {"H", "S"}:
+            continue
+        base_seat = get_race_id(cand_details)
+        if base_seat:
+            race_ids.update(canonical_race_keys(base_seat))
+
+    return {"candidates": candidates, "race_ids": race_ids}
+
+
 def resolve_recipient_party(committee: dict) -> str:
     """Resolve a recipient committee's party for by-party summaries.
 

@@ -79,6 +79,11 @@ def update_committee_expenditures(db, session):
                 exp["committee_id"] = committee_id
                 uid = "{}-{}".format(exp["committee_id"], exp["transaction_id"])
                 exp["uid"] = uid
+                # Normalize a stale candidate_id (e.g. an old House id after a switch
+                # to Senate) to its canonical id so the expenditure substring-matches
+                # the race roster on the frontend instead of being hidden.
+                if exp.get("candidate_id") in db.candidate_aliases:
+                    exp["candidate_id"] = db.candidate_aliases[exp["candidate_id"]]
                 if exp["amendment_indicator"] == "A":
                     if uid in transactions and (
                         transactions[uid]["amendment_indicator"] == "N"
@@ -127,6 +132,11 @@ def update_committee_expenditures(db, session):
 
                 uid = "{}-{}".format(exp["committee_id"], exp["transaction_id"])
                 exp["uid"] = uid
+                # Normalize a stale candidate_id (e.g. an old House id after a switch
+                # to Senate) to its canonical id so the expenditure substring-matches
+                # the race roster on the frontend instead of being hidden.
+                if exp.get("candidate_id") in db.candidate_aliases:
+                    exp["candidate_id"] = db.candidate_aliases[exp["candidate_id"]]
                 if exp["amendment_indicator"] == "A":
                     if uid not in transactions:
                         # Original was never in the processed endpoint (e.g. it was
@@ -152,6 +162,31 @@ def update_committee_expenditures(db, session):
                 break
             else:
                 page += 1
+
+    # Backfill missing candidate_ids from a sibling expenditure for the same seat
+    # and candidate. FEC efile records occasionally omit candidate_id even when the
+    # candidate's name/office/state/district are present; without it the IE can't
+    # substring-match a race roster on the frontend and is hidden. Only fill when a
+    # single candidate_id exists for that seat+name, so the match is unambiguous.
+    def _seat_name_key(t):
+        return (
+            t.get("candidate_office_state"),
+            t.get("candidate_office"),
+            str(t.get("candidate_office_district")),
+            (t.get("candidate_last_name") or "").upper(),
+        )
+
+    ids_by_seat_name = {}
+    for t in transactions.values():
+        if t.get("candidate_id"):
+            ids_by_seat_name.setdefault(_seat_name_key(t), set()).add(
+                t["candidate_id"]
+            )
+    for t in transactions.values():
+        if not t.get("candidate_id"):
+            siblings = ids_by_seat_name.get(_seat_name_key(t))
+            if siblings and len(siblings) == 1:
+                t["candidate_id"] = next(iter(siblings))
 
     # Diff with previously stored expenditures
     # new_transactions = {}

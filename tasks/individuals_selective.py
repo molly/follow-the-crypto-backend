@@ -35,7 +35,9 @@ def fetch_individual_spending_selective(context, individual_ids=None):
         }
         
         try:
-            new_contributions = update_spending_by_individuals(context.db, context.session)
+            new_contributions = update_spending_by_individuals(
+                context.db, context.session, full=getattr(context, "full_fetch", False)
+            )
             return {
                 "status": "success",
                 "processed_individuals": individual_ids,
@@ -46,7 +48,9 @@ def fetch_individual_spending_selective(context, individual_ids=None):
             context.db.individuals = original_individuals
     else:
         # Process all individuals (existing behavior)
-        update_spending_by_individuals(context.db, context.session)
+        update_spending_by_individuals(
+            context.db, context.session, full=getattr(context, "full_fetch", False)
+        )
         return {"status": "success", "processed_individuals": "all"}
 
 

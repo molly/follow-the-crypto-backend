@@ -264,7 +264,11 @@ def summarize_races(db, session):
                     # the recipientDetails document key.
                     candidate_id = db.candidate_aliases.get(candidate_id, candidate_id)
                     recipient = recipients.get(candidate_id)
-                    if recipient:
+                    # Only count as tracked support when it clears the significance
+                    # bar ($25k total or a $10k single contributor). A bare
+                    # recipientDetails entry can hold token amounts that shouldn't,
+                    # on their own, keep an otherwise-inactive race tracked.
+                    if recipient and has_significant_direct_support(recipient):
                         candidates_data[entry["common_name"]][
                             "has_non_pac_support"
                         ] = True

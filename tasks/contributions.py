@@ -13,7 +13,8 @@ def fetch_committee_contributions(context):
     new_contributions = update_committee_contributions(
         context.db,
         context.session,
-        full=getattr(context, "full_contributions", False),
+        full=getattr(context, "full_contributions", False)
+        or getattr(context, "full_fetch", False),
     )
     return {"new_contributions_count": len(new_contributions)}
 

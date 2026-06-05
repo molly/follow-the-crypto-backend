@@ -1,6 +1,7 @@
 from fetch_committee_contributions import (
     should_omit,
     get_ids_to_omit,
+    EARLY_STOP_PATIENCE,
 )
 from utils import FEC_fetch, pick
 
@@ -118,117 +119,15 @@ def _should_skip(
     return False
 
 
-def _fetch_processed(
-    session,
-    search_param,
-    search_values,
-    contributions,
-    contrib_ids,
-    ids_to_omit,
-    exact_terms,
-    occupation_allowlist,
-):
-    """Fetch processed schedule_a contributions for a given search parameter."""
-    last_index = None
-    last_contribution_receipt_date = None
-    contribs_count = 0
-    while True:
-        contribution_data = FEC_fetch(
-            session,
-            "company contributions",
-            "https://api.open.fec.gov/v1/schedules/schedule_a/",
-            params={
-                search_param: search_values,
-                "two_year_transaction_period": "2026",
-                "per_page": "100",
-                "sort": "-contribution_receipt_date",
-                "last_index": last_index,
-                "last_contribution_receipt_date": last_contribution_receipt_date,
-                "min_amount": 1000,
-            },
-        )
-        if not contribution_data:
-            continue
+def update_spending_by_company(db, session, full=False):
+    """
+    Store each tracked company's contributions in the "rawCompanyContributions" collection.
 
-        contribs_count += contribution_data["pagination"]["per_page"]
-        results = contribution_data["results"]
-        ids_to_omit.update(get_ids_to_omit(results))
-        for contrib in results:
-            if _should_skip(
-                contrib,
-                contrib_ids,
-                ids_to_omit,
-                exact_terms,
-                search_param,
-                occupation_allowlist,
-            ):
-                continue
-            contributions.append(process_contribution(contrib))
-            contrib_ids.add(contrib["transaction_id"])
-
-        if contribs_count >= contribution_data["pagination"]["count"]:
-            break
-        else:
-            last_index = contribution_data["pagination"]["last_indexes"]["last_index"]
-            last_contribution_receipt_date = contribution_data["pagination"][
-                "last_indexes"
-            ]["last_contribution_receipt_date"]
-
-
-def _fetch_efiled(
-    session,
-    search_param,
-    search_values,
-    contributions,
-    contrib_ids,
-    ids_to_omit,
-    exact_terms,
-    occupation_allowlist,
-):
-    """Fetch e-filed schedule_a contributions for a given search parameter."""
-    page = 1
-    contribs_count = 0
-    while True:
-        data = FEC_fetch(
-            session,
-            "unprocessed committee contributions",
-            "https://api.open.fec.gov/v1/schedules/schedule_a/efile",
-            params={
-                search_param: search_values,
-                "min_date": "2025-01-01",
-                "per_page": 100,
-                "sort": "-contribution_receipt_date",
-                "page": page,
-                "min_amount": 1000,
-            },
-        )
-
-        if not data:
-            continue
-
-        contribs_count += data["pagination"]["per_page"]
-        results = data["results"]
-        ids_to_omit.update(get_ids_to_omit(results))
-        for contrib in results:
-            if _should_skip(
-                contrib,
-                contrib_ids,
-                ids_to_omit,
-                exact_terms,
-                search_param,
-                occupation_allowlist,
-            ):
-                continue
-            contributions.append({**process_contribution(contrib), "efiled": True})
-            contrib_ids.add(contrib["transaction_id"])
-
-        if page >= data["pagination"]["pages"]:
-            break
-        else:
-            page += 1
-
-
-def update_spending_by_company(db, session):
+    By default this is INCREMENTAL: each search job's results are sorted newest-first, so once
+    EARLY_STOP_PATIENCE consecutive pages contain no transaction IDs we don't already have stored,
+    that job stops paginating; the newly-found contributions are unioned into the existing document.
+    Pass full=True (the --full-fetch flag) to re-fetch everything and overwrite; run periodically.
+    """
     for str_id, company in db.companies.items():
         # Sync companies with the constants dict
         related_individuals = [
@@ -269,33 +168,121 @@ def update_spending_by_company(db, session):
             search_jobs.append(("contributor_name", exact_ids, exact_ids))
             search_jobs.append(("contributor_employer", exact_ids, exact_ids))
 
-        contributions = []
-        contrib_ids = set()
+        old = (
+            db.client.collection("rawCompanyContributions")
+            .document(str_id)
+            .get()
+            .to_dict()
+        )
+        old_contributions = old.get("contributions", []) if old else []
+        old_ids = set(c["transaction_id"] for c in old_contributions)
+        incremental = not full and bool(old_ids)
+
+        fetched = []  # contributions kept this run (everything if full; only-new if incremental)
+        fetched_ids = set()
         # Initialize with company-specific duplicates from database (same as individuals.py)
         ids_to_omit = set(db.duplicate_contributions.get(str_id, []))
 
-        for search_param, search_values, exact_terms in search_jobs:
-            _fetch_processed(
-                session,
-                search_param,
-                search_values,
-                contributions,
-                contrib_ids,
-                ids_to_omit,
-                exact_terms,
-                db.occupation_allowlist,
-            )
-            _fetch_efiled(
-                session,
-                search_param,
-                search_values,
-                contributions,
-                contrib_ids,
-                ids_to_omit,
-                exact_terms,
-                db.occupation_allowlist,
-            )
+        def handle_page(results, efiled, exact_terms, search_param):
+            """Process one page; return True if it held no transaction IDs we didn't already have."""
+            ids_to_omit.update(get_ids_to_omit(results))
+            page_has_new = False
+            for contrib in results:
+                tid = contrib["transaction_id"]
+                if tid not in old_ids:
+                    page_has_new = True
+                if _should_skip(
+                    contrib,
+                    fetched_ids,
+                    ids_to_omit,
+                    exact_terms,
+                    search_param,
+                    db.occupation_allowlist,
+                ):
+                    continue
+                if incremental and tid in old_ids:
+                    fetched_ids.add(tid)
+                    continue
+                processed = process_contribution(contrib)
+                if efiled:
+                    processed["efiled"] = True
+                fetched.append(processed)
+                fetched_ids.add(tid)
+            return not page_has_new
 
+        def fetch_processed(search_param, search_values, exact_terms):
+            last_index = None
+            last_contribution_receipt_date = None
+            contribs_count = 0
+            dry_streak = 0
+            while True:
+                data = FEC_fetch(
+                    session,
+                    "company contributions",
+                    "https://api.open.fec.gov/v1/schedules/schedule_a/",
+                    params={
+                        search_param: search_values,
+                        "two_year_transaction_period": "2026",
+                        "per_page": "100",
+                        "sort": "-contribution_receipt_date",
+                        "last_index": last_index,
+                        "last_contribution_receipt_date": last_contribution_receipt_date,
+                        "min_amount": 1000,
+                    },
+                )
+                if not data:
+                    continue
+                contribs_count += data["pagination"]["per_page"]
+                page_dry = handle_page(data["results"], False, exact_terms, search_param)
+                if incremental:
+                    dry_streak = dry_streak + 1 if page_dry else 0
+                    if dry_streak >= EARLY_STOP_PATIENCE:
+                        break
+                if contribs_count >= data["pagination"]["count"]:
+                    break
+                else:
+                    last_index = data["pagination"]["last_indexes"]["last_index"]
+                    last_contribution_receipt_date = data["pagination"][
+                        "last_indexes"
+                    ]["last_contribution_receipt_date"]
+
+        def fetch_efiled(search_param, search_values, exact_terms):
+            page = 1
+            contribs_count = 0
+            dry_streak = 0
+            while True:
+                data = FEC_fetch(
+                    session,
+                    "unprocessed committee contributions",
+                    "https://api.open.fec.gov/v1/schedules/schedule_a/efile",
+                    params={
+                        search_param: search_values,
+                        "min_date": "2025-01-01",
+                        "per_page": 100,
+                        "sort": "-contribution_receipt_date",
+                        "page": page,
+                        "min_amount": 1000,
+                    },
+                )
+                if not data:
+                    continue
+                contribs_count += data["pagination"]["per_page"]
+                page_dry = handle_page(data["results"], True, exact_terms, search_param)
+                if incremental:
+                    dry_streak = dry_streak + 1 if page_dry else 0
+                    if dry_streak >= EARLY_STOP_PATIENCE:
+                        break
+                if page >= data["pagination"]["pages"]:
+                    break
+                else:
+                    page += 1
+
+        for search_param, search_values, exact_terms in search_jobs:
+            fetch_processed(search_param, search_values, exact_terms)
+            fetch_efiled(search_param, search_values, exact_terms)
+
+        # Incremental unions the new contributions onto what's stored; full overwrites.
+        merged = (old_contributions + fetched) if incremental else fetched
         db.client.collection("rawCompanyContributions").document(str_id).set(
-            {"contributions": contributions}
+            {"contributions": merged}
         )
