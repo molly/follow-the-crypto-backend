@@ -362,7 +362,6 @@ def summarize_recipients(db):
         batch.set(doc_ref, recipient_data)
         count += 1
         if count >= 500:
-            batch.commit()
             batch = db.client.batch()
             count = 0
     if count > 0:

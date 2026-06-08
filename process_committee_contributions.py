@@ -382,16 +382,24 @@ def process_committee_contributions(db):
         for group, data in donorMap["groups"].items():
             # Combine the rollups with the contributions list
             for name in data["rollup"]:
-                if data["rollup"][name]["total"] == 1:
+                rollup_entry = data["rollup"][name]
+                if rollup_entry["total"] == 1:
                     # If there's only one contribution, don't roll up. Throw away rollup fields.
                     data["rollup"][name] = pick_and_redact_contribution(
-                        data["rollup"][name], CONTRIBUTION_FIELDS
+                        rollup_entry, CONTRIBUTION_FIELDS
                     )
                 else:
                     # Throw away fields that only pertain to one contribution, since this will be a rollup
+                    rollup_fields = SHARED_CONTRIBUTION_FIELDS + ROLLUP_CONTRIBUTION_FIELDS
+                    if rollup_entry.get("pre_aggregated"):
+                        # Pre-aggregated rollups (empgroup_*) carry a stable synthetic
+                        # transaction_id. Retain it so manual reviews keyed by that ID keep
+                        # matching across pipeline runs, instead of falling back to the
+                        # name/amount/date composite key, which drifts as the aggregate
+                        # grows and silently wipes the review.
+                        rollup_fields = rollup_fields + ["transaction_id"]
                     data["rollup"][name] = pick_and_redact_contribution(
-                        data["rollup"][name],
-                        SHARED_CONTRIBUTION_FIELDS + ROLLUP_CONTRIBUTION_FIELDS,
+                        rollup_entry, rollup_fields
                     )
 
                 # Add to contribs

@@ -140,34 +140,67 @@ def prune_stale_race_details(db_client, valid_race_data: dict) -> None:
             logging.info(f"Deleted stale raceDetails document: {doc.id}")
 
 
-def prune_untracked_races(db_client) -> None:
+def _shard_state(doc_id: str) -> str:
+    """State for a raceDetails shard doc id ("AZ_6" -> "AZ", legacy "AZ" -> "AZ")."""
+    parts = doc_id.rsplit("_", 1)
+    if len(parts) == 2 and parts[1].isdigit():
+        return parts[0]
+    return doc_id
+
+
+def compute_tracked_race_ids(db) -> set:
+    """Full race ids that should have a raceDetails entry — the exact inverse of
+    the healthcheck's orphaned_spending check.
+
+    A race is tracked when it has PAC spending (always hydrated) or clears the
+    per-candidate direct-support gate (significant_company_races). Both consumers
+    derive from the same spending buckets / gate so prune and the orphan check can
+    never disagree. Keys are full ids (e.g. "AZ-H-06", including special variants),
+    matching by_race / by_race_companies and compute_significant_direct_support.
+    """
+    # Lazy import: recipient_utils imports race_utils (via
+    # process_company_state_spending), so importing it at module load would cycle.
+    from recipient_utils import compute_significant_direct_support
+
+    tracked = set(compute_significant_direct_support(db)["race_ids"])
+    states_data = (
+        db.client.collection("expenditures").document("states").get().to_dict() or {}
+    )
+    for state, data in states_data.items():
+        if state in ("US", "None", None):
+            continue
+        # PAC spending (by_race) should always be hydrated, mirroring the orphan
+        # check's PAC branch.
+        tracked.update(data.get("by_race", {}))
+    return tracked
+
+
+def prune_untracked_races(db) -> None:
     """Remove races from raceDetails that have no tracked activity.
 
-    A race is kept if any candidate has PAC expenditures (support_total or
-    oppose_total > 0) or significant direct industry support
-    (has_non_pac_support). Races with no qualifying candidates are removed.
-    Races whose candidate data hasn't been populated yet are left alone.
+    A race is kept if it should have a raceDetails entry per
+    compute_tracked_race_ids — i.e. it has PAC spending or clears the
+    direct-support gate, the same rule the healthcheck's orphaned_spending check
+    uses to flag missing races. Keying both off one source means a race the orphan
+    check expects can never be pruned out from under it (which would otherwise
+    oscillate it in and out every run). Races whose candidate data hasn't been
+    populated yet are left alone.
 
-    Should run after summarize_races so candidate flags are up to date.
+    Should run after summarize_races so newly scraped races are present.
     """
-    collection = db_client.collection("raceDetails")
+    tracked_race_ids = compute_tracked_race_ids(db)
+    collection = db.client.collection("raceDetails")
     for doc in collection.stream():
+        state = _shard_state(doc.id)
         data = doc.to_dict() or {}
         kept = {}
         removed = []
         for race_id, race_data in data.items():
-            candidates = race_data.get("candidates", {})
-            if not candidates:
+            if not race_data.get("candidates", {}):
                 # summarize_races hasn't populated this race yet — leave it
                 kept[race_id] = race_data
                 continue
-            is_tracked = any(
-                c.get("support_total", 0) > 0
-                or c.get("oppose_total", 0) > 0
-                or c.get("has_non_pac_support")
-                for c in candidates.values()
-            )
-            if is_tracked:
+            if f"{state}-{race_id}" in tracked_race_ids:
                 kept[race_id] = race_data
             else:
                 removed.append(race_id)
@@ -179,7 +212,9 @@ def prune_untracked_races(db_client) -> None:
             logging.info(f"Pruned untracked races from {doc.id}: {removed}")
 
 
-def validate_special_elections(db, detail_ids=None, states_data=None) -> list:
+def validate_special_elections(
+    db, detail_ids=None, states_data=None, significant_company_races=None
+) -> list:
     """Guardrail for the hand-maintained SPECIAL_ELECTIONS map.
 
     SPECIAL_ELECTIONS is domain knowledge that can't be derived from FEC data, so
@@ -190,15 +225,23 @@ def validate_special_elections(db, detail_ids=None, states_data=None) -> list:
       1. Misclassification: a current-cycle special-only seat (has_regular=False)
          that nonetheless accumulated spending on its bare regular key — meaning
          the "-special" routing isn't being applied.
-      2. Missing special detail: a canonical race key with spending but no
-         raceDetails entry (covers company-only specials like OH-S-special).
+      2. Missing special detail: a canonical race key with spending that should
+         have been hydrated but has no raceDetails entry. "Should have been
+         hydrated" mirrors the scraper's inclusion rule: PAC spending (by_race) is
+         always scraped, while company-only spending (by_race_companies) is only
+         scraped when the race clears the per-candidate direct-support gate. A
+         company-only special whose money is all sub-threshold (e.g. a single
+         small direct contribution split onto the "-special" key by
+         canonical_race_keys) is excluded from scraping by design, so it is not
+         drift — flagging it would contradict the scraper and the healthcheck's
+         orphaned_spending check, which both apply the same gate.
 
     (General "spending but no detail" orphans are reported by the healthcheck's
     orphaned-spending check, which ranks them by dollar amount.)
 
     Logs every finding at WARNING level and returns them so a pipeline task can
-    fail loudly. Read-only. Pass detail_ids/states_data to reuse already-loaded
-    data, otherwise they're fetched here.
+    fail loudly. Read-only. Pass detail_ids/states_data/significant_company_races
+    to reuse already-loaded data, otherwise they're fetched here.
     """
 
     def short_id(state, race_id):
@@ -221,6 +264,12 @@ def validate_special_elections(db, detail_ids=None, states_data=None) -> list:
             db.client.collection("expenditures").document("states").get().to_dict()
             or {}
         )
+    if significant_company_races is None:
+        # Imported lazily to avoid a module-load cycle (recipient_utils imports
+        # race_utils via process_company_state_spending).
+        from recipient_utils import compute_significant_direct_support
+
+        significant_company_races = compute_significant_direct_support(db)["race_ids"]
 
     for seat in SPECIAL_ELECTIONS:
         if not is_current_special(seat):
@@ -228,9 +277,9 @@ def validate_special_elections(db, detail_ids=None, states_data=None) -> list:
         state = seat.split("-")[0]
         have = detail_ids.get(state, set())
         state_data = states_data.get(state, {})
-        spending_keys = set(state_data.get("by_race", {})) | set(
-            state_data.get("by_race_companies", {})
-        )
+        by_race = set(state_data.get("by_race", {}))
+        by_companies = set(state_data.get("by_race_companies", {}))
+        spending_keys = by_race | by_companies
 
         if not SPECIAL_ELECTIONS[seat]["has_regular"] and seat in spending_keys:
             warn(
@@ -239,7 +288,13 @@ def validate_special_elections(db, detail_ids=None, states_data=None) -> list:
             )
 
         for key in canonical_race_keys(seat):
-            if key in spending_keys and short_id(state, key) not in have:
+            if short_id(state, key) in have:
+                continue
+            # PAC spending should always be hydrated; company-only spending only
+            # when it clears the direct-support gate (same rule as the scraper).
+            if key in by_race or (
+                key in by_companies and key in significant_company_races
+            ):
                 warn(f"{key}: spending present but no raceDetails entry")
 
     if not warnings:

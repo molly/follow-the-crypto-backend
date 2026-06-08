@@ -10,14 +10,20 @@ from utils import compare_names_lastfirst, get_sector_keys, pick
 ROLLUP_THRESHOLD = 10000
 
 
-def get_contribution_id(contrib):
-    """Generate a unique identifier for a contribution for manual review matching."""
+def get_contribution_id(contrib, committee_id=""):
+    """Generate a stable identifier for a contribution for manual review matching.
+
+    Individual transactions (large contributions and single-contribution rollups)
+    are keyed by their FEC transaction_id. Multi-contribution rollups have no single
+    transaction_id, so they are keyed by recipient committee and normalized contributor
+    name. Both are stable across pipeline runs: the rollup's summed amount and oldest
+    date are NOT used, because the incremental fetch grows the rollup over time and any
+    drift in those values would silently break the match and wipe the manual review.
+    """
     if contrib.get("transaction_id"):
         return f"txn_{contrib['transaction_id']}"
     name = contrib.get("contributor_name", "")
-    amount = contrib.get("total_receipt_amount", 0)
-    date = contrib.get("oldest", "")
-    return f"rollup_{name}_{amount}_{date}"
+    return f"rollup_{committee_id}_{name}"
 
 
 def load_all_existing_reviews(db):
@@ -29,17 +35,24 @@ def load_all_existing_reviews(db):
     all_reviews = {}
     for doc in db.client.collection("companies").stream():
         contributions_data = doc.to_dict().get("contributions", [])
-        # Handle both list format (from previous pipeline run) and dict format
+        # Handle both list format (from previous pipeline run) and dict format.
+        # Pair each group with its recipient committee_id so rollup reviews can be
+        # matched on a stable (committee, contributor) key.
         if isinstance(contributions_data, dict):
-            groups = contributions_data.values()
+            groups = [
+                (committee_id, group)
+                for committee_id, group in contributions_data.items()
+            ]
         else:
-            groups = contributions_data
+            groups = [
+                (group.get("committee_id", ""), group) for group in contributions_data
+            ]
         reviews = {}
-        for group in groups:
+        for committee_id, group in groups:
             for contrib in group.get("contributions", []):
                 review = contrib.get("manualReview")
                 if review and review.get("reviewed"):
-                    contrib_id = get_contribution_id(contrib)
+                    contrib_id = get_contribution_id(contrib, committee_id)
                     reviews[contrib_id] = {
                         "manualReview": review,
                         "description": contrib.get("description"),
@@ -377,10 +390,10 @@ def process_company_contributions(db, session):
 
         # Merge back manualReview flags and recompute group totals excluding omitted
         company_reviews = existing_reviews.get(company_id, {})
-        for group_data in contributions.values():
+        for committee_id, group_data in contributions.items():
             reviewed_total = 0
             for contrib in group_data["contributions"]:
-                contrib_id = get_contribution_id(contrib)
+                contrib_id = get_contribution_id(contrib, committee_id)
                 if contrib_id in company_reviews:
                     saved = company_reviews[contrib_id]
                     contrib["manualReview"] = saved["manualReview"]

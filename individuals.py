@@ -18,6 +18,16 @@ def get_individual_search_params(individual, companies, efiled=False):
     search_params["contributor_name"] = individual.get(
         "nameSearch", individual["id"].replace("-", " ")
     )
+
+    # An explicit empty employerSearch ("" or [] or [""]) means search by NAME ONLY -- no employer
+    # or zip constraint. This is for high-profile donors who give under several different employers
+    # (e.g. Elon Musk via SpaceX / Tesla / xAI / X), where any single-employer filter would miss
+    # most of their gifts. Checked before the employer/zip branches so nothing gets attached.
+    if "employerSearch" in individual:
+        es = individual["employerSearch"]
+        if not es or (isinstance(es, list) and es[0] == "") or es == "":
+            return search_params
+
     if "zip" in individual and not efiled:
         search_params["contributor_zip"] = individual["zip"]
     elif efiled and "city" in individual:
@@ -38,12 +48,8 @@ def get_individual_search_params(individual, companies, efiled=False):
     elif "company" in individual:
         search_params["contributor_employer"] = individual["company"]
 
+    # A non-empty employerSearch appends extra employer terms to whatever was set above.
     if "employerSearch" in individual:
-        if (
-            len(individual["employerSearch"]) == 0
-            or individual["employerSearch"][0] == ""
-        ):
-            return search_params
         if "contributor_employer" not in search_params:
             search_params["contributor_employer"] = []
         if isinstance(individual["employerSearch"], list):

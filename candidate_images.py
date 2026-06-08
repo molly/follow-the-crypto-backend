@@ -44,6 +44,11 @@ to_skip = {
     "Tisha Benoit",
     "Andromeda Crum",
     "David Anderson",
+    "John Dority",
+    "Matthew Sin",
+    "Lewis Mizrahi",
+    "Jared Kane",
+    "Nathan Tracy"
 }
 
 

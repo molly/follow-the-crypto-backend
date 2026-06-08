@@ -24,6 +24,7 @@ Sections:
 
 import datetime
 import logging
+import os
 
 from states import SPECIAL_ELECTIONS, CURRENT_CYCLE
 from race_utils import get_all_races, validate_special_elections
@@ -235,10 +236,14 @@ def unreviewed_contributions(db):
 
 
 def candidates_awaiting_results(all_races, today=None):
-    """Past-dated subraces with no called outcome.
+    """Past-dated subraces with an incomplete outcome.
 
-    A subrace whose date is on/before today but where no candidate has a non-null
-    `won` flag is awaiting results (per the RaceCandidate.won result model).
+    A subrace whose date is on/before today is awaiting results when any candidate
+    still lacks a non-null `won` flag (per the RaceCandidate.won result model). The
+    scraper assigns `won` to every candidate once a winner exists, so a fully called
+    race has none missing; a lone `None` is a real gap -- e.g. a top-two primary
+    whose first slot is called while the second is still being decided, or a
+    manually merged candidate whose result hasn't been recorded yet.
     """
     today = today or datetime.date.today().isoformat()
     findings = []
@@ -251,8 +256,8 @@ def candidates_awaiting_results(all_races, today=None):
                 candidates = race.get("candidates", [])
                 if not candidates:
                     continue
-                if any(c.get("won") is not None for c in candidates):
-                    continue  # has a recorded outcome
+                if all(c.get("won") is not None for c in candidates):
+                    continue  # every candidate has a recorded outcome
                 label = race.get("type") or "race"
                 party = race.get("party")
                 tag = f"{label}/{party}" if party else label
@@ -276,10 +281,13 @@ def run_healthcheck(db, check_images=True):
     )
 
     report = {}
-    report["special_election_drift"] = validate_special_elections(
-        db, detail_ids=detail_ids, states_data=states_data
-    )
     significant_company_races = compute_significant_direct_support(db)["race_ids"]
+    report["special_election_drift"] = validate_special_elections(
+        db,
+        detail_ids=detail_ids,
+        states_data=states_data,
+        significant_company_races=significant_company_races,
+    )
     report["orphaned_spending"] = orphaned_spending(
         states_data, detail_ids, significant_company_races
     )
@@ -410,7 +418,16 @@ def _log_report(report):
             lines.append(f"  ... and {len(images) - 25} more")
 
     lines.append("\n" + "=" * 72)
-    logging.info("\n".join(lines))
+    text = "\n".join(lines)
+    logging.info(text)
+
+    out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "healthcheck.txt")
+    try:
+        with open(out_path, "w") as f:
+            f.write(text + "\n")
+        logging.info("Wrote healthcheck report to %s", out_path)
+    except OSError as error:  # file write is best-effort; never break the report
+        logging.warning("Could not write %s: %s", out_path, error)
 
 
 if __name__ == "__main__":

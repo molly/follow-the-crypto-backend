@@ -224,3 +224,56 @@ def compute_race_insights(db):
         f"{sum(r['is_coordinated'] for r in races)} coordinated, "
         f"{sum(r['is_cross_sector'] for r in races)} cross-sector)"
     )
+    _log_insights(races)
+
+
+def _money(amount):
+    return f"${amount:,.0f}"
+
+
+def _log_insights(races):
+    """Log the adversarial and coordinated races so a pipeline run surfaces where
+    tracked PACs are spending against each other or pushing the same direction."""
+    adversarial = [r for r in races if r["is_adversarial"]]
+    coordinated = [r for r in races if r["is_coordinated"]]
+
+    lines = ["", "=" * 72, "RACE INSIGHTS", "=" * 72]
+
+    lines.append(f"\nAdversarial races (PACs spending against each other): {len(adversarial)}")
+    for r in adversarial:
+        reasons = ", ".join(r["adversarial_reasons"])
+        lines.append(f"\n  {r['race_id']}  {_money(r['total'])}  [{reasons}]")
+        for p in r["candidate_positions"]:
+            sup = p["supporting_committees"]
+            opp = p["opposing_committees"]
+            if not (sup and opp):
+                continue  # only the clashed candidates are interesting here
+            flag = " (contested)" if p["contested"] else ""
+            lines.append(f"      {p['candidate']}{flag}")
+            for c in sup:
+                lines.append(f"        + {c['name']} {_money(c['amount'])}")
+            for c in opp:
+                lines.append(f"        - {c['name']} {_money(c['amount'])}")
+        # Rival backing: distinct candidates each drawing support.
+        backed = [p for p in r["candidate_positions"] if p["supporting_committees"]]
+        if len(backed) >= 2:
+            lines.append("      backing rivals:")
+            for p in backed:
+                names = ", ".join(c["name"] for c in p["supporting_committees"])
+                lines.append(f"        {p['candidate']} <- {names}")
+
+    lines.append(f"\nCoordinated races (PACs spending the same direction): {len(coordinated)}")
+    for r in coordinated:
+        lines.append(f"\n  {r['race_id']}  {_money(r['total'])}")
+        for p in r["candidate_positions"]:
+            sup = p["supporting_committees"]
+            opp = p["opposing_committees"]
+            if len(sup) >= 2:
+                names = ", ".join(c["name"] for c in sup)
+                lines.append(f"      support {p['candidate']}: {names}")
+            if len(opp) >= 2:
+                names = ", ".join(c["name"] for c in opp)
+                lines.append(f"      oppose  {p['candidate']}: {names}")
+
+    lines.append("\n" + "=" * 72)
+    logging.info("\n".join(lines))

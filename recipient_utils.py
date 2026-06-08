@@ -47,15 +47,26 @@ def compute_significant_direct_support(db, recipients=None) -> dict:
     that should have been hydrated) from a sub-threshold company-only race that is
     excluded from scraping by design. Keeping both in one place prevents the two
     consumers from drifting to different thresholds.
+
+    Only candidates actually running this cycle are credited. A principal campaign
+    committee links every candidacy a person has ever filed (e.g. an old House run
+    plus the Senate seat they now hold), and FEC returns all of those ids on the
+    contribution group. Crediting the stale ones routed a senator's money to the
+    House seat they vacated, flagging that seat as a spurious orphan. The
+    running-this-cycle gate (isRunningThisCycle or on the seat roster) mirrors the
+    primary gate in process_company_state_spending.compute_company_state_spending,
+    so this function and by_race_companies agree on which candidacies count.
     """
     # Imported lazily to avoid a module-load cycle (process_company_state_spending
-    # imports this module for get_all_recipients).
-    from utils import get_beneficiaries
-    from process_company_state_spending import get_race_id
+    # and race_utils both import this module).
+    from process_company_state_spending import get_race_id, candidate_roster_status
     from states import canonical_race_keys
+    from race_utils import get_all_races
 
     if recipients is None:
         recipients = get_all_recipients(db)
+
+    all_races = get_all_races(db.client)
 
     totals: dict = {}
     max_contrib: dict = {}
@@ -63,14 +74,28 @@ def compute_significant_direct_support(db, recipients=None) -> dict:
     for doc in db.client.collection("companies").stream():
         company = doc.to_dict()
         for group in company.get("contributions", []):
-            recipient_committee = recipients.get(group["committee_id"])
-            beneficiaries = get_beneficiaries(
-                group, recipient_committee, db.non_candidate_committees
-            )
-            for beneficiary in beneficiaries:
-                if beneficiary[0] == "C":
+            committee_id = group.get("committee_id")
+            if not committee_id or committee_id in (db.non_candidate_committees or set()):
+                continue
+            recipient_committee = recipients.get(committee_id)
+            if not recipient_committee:
+                continue
+            candidate_ids = set(recipient_committee.get("candidate_ids", []) or [])
+            candidate_details = recipient_committee.get("candidate_details", {})
+            for cid in candidate_ids:
+                cand_details = candidate_details.get(cid)
+                if not cand_details or cand_details.get("office") not in {"H", "S"}:
                     continue
-                canonical = db.candidate_aliases.get(beneficiary, beneficiary)
+                # Skip candidacies that aren't this cycle's, so a person's stale
+                # filings don't credit money to a seat they no longer run for.
+                _, on_roster = candidate_roster_status(all_races, cand_details, cid)
+                if not (cand_details.get("isRunningThisCycle", False) or on_roster):
+                    continue
+                # An aliased id is running under a different candidacy; its own
+                # committee's race is stale (matches compute_company_state_spending).
+                if cid in db.candidate_aliases:
+                    continue
+                canonical = db.candidate_aliases.get(cid, cid)
                 totals[canonical] = totals.get(canonical, 0) + group["total"]
                 for contrib in group.get("contributions", []):
                     amount = (
@@ -80,13 +105,7 @@ def compute_significant_direct_support(db, recipients=None) -> dict:
                     if amount > max_contrib.get(canonical, 0):
                         max_contrib[canonical] = amount
                 if canonical not in details_by_candidate:
-                    cand_details = (
-                        (recipient_committee or {})
-                        .get("candidate_details", {})
-                        .get(beneficiary)
-                    )
-                    if cand_details:
-                        details_by_candidate[canonical] = cand_details
+                    details_by_candidate[canonical] = cand_details
 
     candidates = {
         candidate
