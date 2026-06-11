@@ -34,7 +34,12 @@ else:
 fastly_ok = True
 fastly_token = os.environ.get("FASTLY_TOKEN")
 if not fastly_token:
-    print("Warning: FASTLY_TOKEN not set in .env, skipping Fastly purge")
+    # Without the purge, the edge keeps serving stale HTML for up to s-maxage
+    # (7 days, set by `export const revalidate` in the Next root layout). A
+    # skipped purge is a hard failure, not a warning — otherwise revalidate
+    # reports success while visitors keep seeing old data.
+    fastly_ok = False
+    print("Error: FASTLY_TOKEN not set in .env, cannot purge Fastly edge cache")
 else:
     fastly_response = requests.post(
         "https://api.fastly.com/service/0lWAENYUEVE3yrULlZ9Jnu/purge_all",
@@ -47,4 +52,10 @@ else:
         print(f"Fastly purge failed: {fastly_response.status_code} {fastly_response.text}")
 
 if not (next_ok and fastly_ok):
+    failed = [
+        name
+        for name, ok in (("Next revalidate", next_ok), ("Fastly purge", fastly_ok))
+        if not ok
+    ]
+    print(f"\nRevalidation FAILED: {', '.join(failed)}. Edge may serve stale data.")
     sys.exit(1)
