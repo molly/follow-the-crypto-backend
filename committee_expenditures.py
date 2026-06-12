@@ -29,16 +29,6 @@ EXPENDITURE_FIELDS = [
 ]
 
 
-def get_race_name(expenditure):
-    race = "{candidate_office_state}-{candidate_office}".format(**expenditure)
-    if (
-        expenditure["candidate_office_district"]
-        and int(expenditure["candidate_office_district"]) != 0
-    ):
-        race += "-" + expenditure["candidate_office_district"]
-    return race
-
-
 def update_committee_expenditures(db, session):
     """
     Fetch processed transactions, and any transactions that have been efiled but not yet processed.

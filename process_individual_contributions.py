@@ -1,5 +1,7 @@
 import logging
 import re
+from google.cloud import firestore
+
 from get_missing_recipients import get_missing_recipient_data
 from recipient_utils import (
     get_all_recipients,
@@ -424,8 +426,16 @@ def process_individual_contributions(db, session):
                 party_summary[party] = 0
             party_summary[party] += group_data["total"]
 
+        # See note in process_company_contributions.py: stamp updated_at so the
+        # input-staleness check can see that this collection changed. summarize_recipients
+        # declares `inputs=["individuals"]` and relies on this field.
         db.client.collection("individuals").document(ind_id).set(
-            {"party_summary": party_summary, "contributions": enriched_contributions}, merge=True
+            {
+                "party_summary": party_summary,
+                "contributions": enriched_contributions,
+                "updated_at": firestore.SERVER_TIMESTAMP,
+            },
+            merge=True,
         )
 
         individual_total = sum(party_summary.values())

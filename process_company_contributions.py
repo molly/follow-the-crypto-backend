@@ -1,3 +1,5 @@
+from google.cloud import firestore
+
 from get_missing_recipients import get_missing_recipient_data
 from process_individual_contributions import handle_memo_items
 from recipient_utils import (
@@ -478,8 +480,17 @@ def process_company_contributions(db, session):
         sorted_contributions = sorted(
             contributions.values(), key=lambda x: x["total"], reverse=True
         )
+        # Stamp updated_at so the pipeline's input-staleness check
+        # (StateTracker._collection_modified_since) can detect that this
+        # collection changed. Downstream tasks like summarize_recipients declare
+        # `inputs=["companies"]` expecting this field; without it, their staleness
+        # guard silently never fires and recipientDetails goes stale.
         db.client.collection("companies").document(company_id).set(
-            {"party_summary": party_summary, "contributions": sorted_contributions},
+            {
+                "party_summary": party_summary,
+                "contributions": sorted_contributions,
+                "updated_at": firestore.SERVER_TIMESTAMP,
+            },
             merge=True,
         )
 

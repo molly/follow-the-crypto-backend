@@ -1,5 +1,6 @@
 from states import SPECIAL_ELECTIONS, CURRENT_CYCLE
 from utils import get_sector_keys
+from race_utils import get_all_races
 
 
 def sort_and_slice(lst, length=10):
@@ -16,13 +17,47 @@ def sort_and_slice(lst, length=10):
     )[:length]
 
 
-def get_race_name(expenditure):
+def build_candidate_seat_map(db):
+    """candidate_id -> base race id (e.g. 'NY-H-15'), built from the raceDetails
+    rosters. The FEC candidate_id is authoritative for which seat a candidate is
+    running for, whereas the filer-entered candidate_office_district is free text
+    and is sometimes mis-keyed. Only candidate_ids rostered in a single seat are
+    included; an id that appears in more than one seat is ambiguous and left to
+    the district field. Special-election variants ('NY-H-15-special') collapse to
+    the same base seat, so they don't count as a second seat."""
+    cid_to_seats = {}
+    for state, races in get_all_races(db.client).items():
+        for race_id, race_data in races.items():
+            base = (
+                race_id[: -len("-special")]
+                if race_id.endswith("-special")
+                else race_id
+            )
+            seat = f"{state}-{base}"
+            for candidate in (race_data.get("candidates") or {}).values():
+                cid = candidate.get("candidate_id")
+                if not cid:
+                    continue
+                cid = db.candidate_aliases.get(cid, cid)
+                cid_to_seats.setdefault(cid, set()).add(seat)
+    return {cid: seats.pop() for cid, seats in cid_to_seats.items() if len(seats) == 1}
+
+
+def get_race_name(expenditure, cid_to_seat=None):
     race = "{candidate_office_state}-{candidate_office}".format(**expenditure)
     if (
         expenditure["candidate_office_district"]
         and int(expenditure["candidate_office_district"]) != 0
     ):
         race += "-" + expenditure["candidate_office_district"]
+    # The filer-entered candidate_office_district is unreliable (e.g. a Torres
+    # NY-15 IE filed under district 25), which strands the spending under a
+    # non-existent race. The candidate_id is authoritative, so when it's rostered
+    # in exactly one seat, trust that seat over the district field.
+    if cid_to_seat:
+        seat = cid_to_seat.get(expenditure.get("candidate_id"))
+        if seat and seat != race:
+            race = seat
     entry = SPECIAL_ELECTIONS.get(race)
     if entry:
         election_type = expenditure.get("election_type") or ""
@@ -43,6 +78,7 @@ def process_expenditures(db):
     all_expenditures = (
         db.client.collection("expenditures").document("all").get().to_dict()
     )
+    cid_to_seat = build_candidate_seat_map(db)
     states = {}
     new_opposition_spending = set()
 
@@ -76,7 +112,7 @@ def process_expenditures(db):
     for uid, expenditure in all_expenditures.items():
         if not expenditure["expenditure_amount"]:
             continue
-        race = get_race_name(expenditure)
+        race = get_race_name(expenditure, cid_to_seat)
         committee_id = expenditure["committee_id"]
         state = expenditure["candidate_office_state"]
         if state is None:

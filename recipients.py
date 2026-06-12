@@ -362,6 +362,11 @@ def summarize_recipients(db):
         batch.set(doc_ref, recipient_data)
         count += 1
         if count >= 500:
+            # Commit the full batch BEFORE starting a new one. Without this commit
+            # every batch of 500 was discarded and only the trailing <500 recipients
+            # were ever written, so most recipientDetails docs (incl. the big super
+            # PACs) silently kept stale totals no matter how often the task re-ran.
+            batch.commit()
             batch = db.client.batch()
             count = 0
     if count > 0:
