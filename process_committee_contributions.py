@@ -18,6 +18,7 @@ SHARED_CONTRIBUTION_FIELDS = [
     "contributor_aggregate_ytd",
     "redacted",
     "link",
+    "individual_link",
 ]
 
 CONTRIBUTION_FIELDS = SHARED_CONTRIBUTION_FIELDS + [
@@ -150,6 +151,31 @@ def process_contribution(contrib, db, donorMap):
         # Mark to redact later
         contrib["redacted"] = True
 
+    # Match this contributor to a tracked individual. Drives both the grouping
+    # override below and the per-contribution individual_link. Skip redacted
+    # contributors so we don't deanonymize them. Prefer the structured name
+    # fields over contributor_name, which can carry stray double spaces
+    # ("HOROWITZ,  BENJAMIN") that blank out the first name during matching and
+    # mislink to a same-surname individual.
+    matched_individual = None
+    if not redacted:
+        last_name = (contrib.get("contributor_last_name") or "").strip()
+        first_name = (contrib.get("contributor_first_name") or "").strip()
+        if (
+            last_name
+            and last_name.upper() != "N/A"
+            and first_name
+            and first_name.upper() != "N/A"
+        ):
+            lookup_name = f"{last_name}, {first_name}"
+        else:
+            lookup_name = " ".join((contrib.get("contributor_name") or "").split())
+        if "," in lookup_name:
+            for individual in db.individuals.values():
+                if compare_names_lastfirst(individual["name"], lookup_name):
+                    matched_individual = individual
+                    break
+
     # Get group name
     group = None
     if (
@@ -164,6 +190,21 @@ def process_contribution(contrib, db, donorMap):
         group = contrib["contributor_name"]
     elif group in db.company_aliases:
         group = db.company_aliases[group]
+
+    # A tracked individual associated with exactly one company is grouped under
+    # that company regardless of the employer they listed (often blank,
+    # "retired", "self-employed", etc.). Resolve to the company entity's name,
+    # uppercased, so the group key matches that company's other contributors.
+    if matched_individual and len(matched_individual.get("company") or []) == 1:
+        associated_company = matched_individual["company"][0].lower()
+        for company in db.companies.values():
+            if company["name"].lower() == associated_company or any(
+                alias.lower() == associated_company
+                for alias in company.get("aliases", [])
+            ):
+                group = company["name"].upper()
+                break
+
     # Final guard: run after all other transformations so it can't be bypassed
     # by the individual_employers or company_aliases branches above.
     if not group or group.strip().upper() == "N/A":
@@ -192,6 +233,13 @@ def process_contribution(contrib, db, donorMap):
 
     if link:
         contrib["link"] = link
+
+    # Independently of the group link (which points at the contributor's
+    # employer/company so the group header links there), link an individual
+    # contributor directly to their own profile page when they're a tracked
+    # individual.
+    if matched_individual:
+        contrib["individual_link"] = "/2026/individuals/" + matched_individual["id"]
 
     # Add group to map if the group isn't already in there
     if group not in donorMap["groups"]:

@@ -6,6 +6,29 @@ from utils import FEC_fetch
 EXCLUDED_COMMITTEE_IDS = ["C00694323", "C00401224"]
 
 
+def should_exclude_contribution(contrib, individual):
+    """
+    Drop contributions that match an individual's `excludeContributions` rules.
+
+    Name-only searches (an individual with no employer/zip filter) can pull in
+    same-named donors who are not the tracked individual. `excludeContributions`
+    is a dict of {raw FEC field: [values]}; a contribution is dropped if any field
+    matches any listed value (case-insensitive). E.g. {"contributor_state": ["IN"]}
+    drops the Indiana namesake from anna-brockman's name-only results, now and for
+    any future contributions she makes -- no per-transaction maintenance.
+    """
+    rules = individual.get("excludeContributions")
+    if not rules:
+        return False
+    for field, values in rules.items():
+        value = contrib.get(field)
+        if value is None:
+            continue
+        if str(value).strip().upper() in {str(v).strip().upper() for v in values}:
+            return True
+    return False
+
+
 def get_associated_company_ids(individual, companies):
     company_ids = []
     if "company" in individual:
@@ -106,8 +129,13 @@ def update_spending_by_individuals(db, session, full=False):
                 tid = contrib["transaction_id"]
                 if tid not in old_contribution_ids:
                     page_has_new = True
-                if tid in ids_to_omit or contrib["committee_id"] in EXCLUDED_COMMITTEE_IDS:
-                    # Duplicate transactions, or contributions to WinRed & ActBlue
+                if (
+                    tid in ids_to_omit
+                    or contrib["committee_id"] in EXCLUDED_COMMITTEE_IDS
+                    or should_exclude_contribution(contrib, individual)
+                ):
+                    # Duplicate transactions, contributions to WinRed & ActBlue, or
+                    # same-named donors excluded via the individual's excludeContributions rule
                     continue
                 if tid in fetched_ids or (incremental and tid in old_contribution_ids):
                     continue

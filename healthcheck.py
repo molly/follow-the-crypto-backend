@@ -20,6 +20,9 @@ Sections:
   - unreviewed_contributions Committee + company contributions awaiting review.
   - candidates_without_images Candidates with no image in the storage bucket.
   - candidates_awaiting_results Past-dated subraces with no called outcome.
+  - notable_patterns_premises Editorial claims in the NotablePatterns home-page
+                             cards that no longer hold (figures auto-update, but
+                             the prose needs a human rewrite when flagged).
 """
 
 import datetime
@@ -265,6 +268,152 @@ def candidates_awaiting_results(all_races, today=None):
     return sorted(findings)
 
 
+# Editorial premises asserted by the frontend NotablePatterns home-page cards
+# (src/app/components/home/NotablePatterns.tsx). The cards' dollar/count figures
+# auto-update from this same data, but the hand-written narrative does not: if
+# any premise below flips, the prose is stale and must be rewritten. Keep these
+# constants in sync with the card copy.
+_DEFEND_AMERICAN_JOBS = "C00836221"  # crypto, "Defend American Jobs"
+_AMERICAN_MISSION = "C00916692"  # AI, "American Mission"
+_EXPECTED_INTRA_SECTOR_CONFLICTS = {"NY-H-12"}
+_EXPECTED_TOP_OPPOSE_TARGETS = {"Juliana Stratton", "Alex Bores"}
+# Republicans should remain a negligible share of opposition spending.
+_OPPOSE_REP_SHARE_LIMIT = 0.10
+
+
+def _supported(committee):
+    return {c["candidate"] for c in committee.get("candidates", []) if (c.get("support") or 0) > 0}
+
+
+def _opposed(committee):
+    return {c["candidate"] for c in committee.get("candidates", []) if (c.get("oppose") or 0) > 0}
+
+
+def _intra_sector_conflicts(races):
+    """Races with a candidate both supported and opposed by committees of the
+    same sector -- the precise definition of an intra-sector conflict (does not
+    rely on the is_adversarial flag, which over-counts dropped-out candidates)."""
+    conflicts = set()
+    for r in races:
+        for pos in r.get("candidate_positions", []):
+            sup_secs = {c.get("sector") for c in pos.get("supporting_committees", [])}
+            opp_secs = {c.get("sector") for c in pos.get("opposing_committees", [])}
+            if sup_secs & opp_secs:
+                conflicts.add(r["race_id"])
+    return conflicts
+
+
+def notable_patterns_premises(db):
+    """Check the editorial premises behind the NotablePatterns cards.
+
+    Returns a list of {premise, ok, detail} dicts. ok=False means the data has
+    drifted away from what the hand-written card copy claims, so the prose needs
+    a human rewrite (separate from the figures, which update automatically).
+    """
+    from collections import Counter
+
+    races = (
+        db.client.collection("raceInsights").document("races").get().to_dict() or {}
+    ).get("races", [])
+    by_party = (
+        db.client.collection("expenditures").document("by_party").get().to_dict() or {}
+    )
+    cross = [r for r in races if r.get("is_cross_sector")]
+    checks = []
+
+    # Card 1: the most common cross-sector pairing is Defend American Jobs + American Mission.
+    pair_counts = Counter()
+    for r in cross:
+        crypto_ids = {c["id"] for c in r.get("committees", []) if c.get("sector") == "crypto"}
+        ai_ids = {c["id"] for c in r.get("committees", []) if c.get("sector") == "ai"}
+        for a in crypto_ids:
+            for b in ai_ids:
+                pair_counts[frozenset((a, b))] += 1
+    expected_pair = frozenset((_DEFEND_AMERICAN_JOBS, _AMERICAN_MISSION))
+    expected_count = pair_counts.get(expected_pair, 0)
+    max_count = max(pair_counts.values()) if pair_counts else 0
+    checks.append({
+        "premise": "Defend American Jobs + American Mission is the most common cross-sector pairing",
+        "ok": expected_count > 0 and expected_count == max_count,
+        "detail": f"DAJ+American Mission co-spend in {expected_count} cross-sector races; "
+        f"busiest cross-sector pairing has {max_count}",
+    })
+
+    # Card 1: where both spend, they always back the same single candidate (never opposing, never rivals).
+    shared = [
+        r for r in cross
+        if {_DEFEND_AMERICAN_JOBS, _AMERICAN_MISSION}
+        <= {c["id"] for c in r.get("committees", [])}
+    ]
+    divergent = []
+    for r in shared:
+        daj = next(c for c in r["committees"] if c["id"] == _DEFEND_AMERICAN_JOBS)
+        am = next(c for c in r["committees"] if c["id"] == _AMERICAN_MISSION)
+        daj_s, am_s = _supported(daj), _supported(am)
+        if daj_s != am_s or not daj_s or _opposed(daj) or _opposed(am):
+            divergent.append(r["race_id"])
+    checks.append({
+        "premise": "Defend American Jobs + American Mission always support the same candidate",
+        "ok": not divergent,
+        "detail": f"{len(shared)} shared races"
+        + (f"; DIVERGENT in {', '.join(divergent)}" if divergent else "; all aligned"),
+    })
+
+    # Card 2: NY-H-12 is the only intra-sector conflict.
+    conflicts = _intra_sector_conflicts(races)
+    checks.append({
+        "premise": "NY-H-12 is the only intra-sector conflict",
+        "ok": conflicts == _EXPECTED_INTRA_SECTOR_CONFLICTS,
+        "detail": f"intra-sector conflicts: {', '.join(sorted(conflicts)) or 'none'}",
+    })
+
+    # Card 3: crypto IEs lean Republican; AI IEs lean Democratic.
+    crypto = by_party.get("crypto", {})
+    ai = by_party.get("ai", {})
+    c_rep, c_dem = crypto.get("rep_support", 0) or 0, crypto.get("dem_support", 0) or 0
+    a_rep, a_dem = ai.get("rep_support", 0) or 0, ai.get("dem_support", 0) or 0
+    checks.append({
+        "premise": "Crypto support spending leans Republican",
+        "ok": c_rep > c_dem,
+        "detail": f"crypto support: {_money(c_rep)} R vs {_money(c_dem)} D",
+    })
+    checks.append({
+        "premise": "AI support spending leans Democratic",
+        "ok": a_dem > a_rep,
+        "detail": f"AI support: {_money(a_dem)} D vs {_money(a_rep)} R",
+    })
+
+    # Card 4: nearly all opposition spending targets Democrats.
+    allp = by_party.get("all", {})
+    dem_opp = allp.get("dem_oppose", 0) or 0
+    rep_opp = allp.get("rep_oppose", 0) or 0
+    total_opp = dem_opp + rep_opp
+    rep_share = rep_opp / total_opp if total_opp else 0
+    checks.append({
+        "premise": "Opposition spending overwhelmingly targets Democrats",
+        "ok": rep_share <= _OPPOSE_REP_SHARE_LIMIT,
+        "detail": f"{_money(dem_opp)} vs Democrats, {_money(rep_opp)} vs Republicans "
+        f"(R share {rep_share:.0%})",
+    })
+
+    # Card 4: the two largest opposition targets are Stratton and Bores.
+    opp_by_cand = Counter()
+    for r in races:
+        for pos in r.get("candidate_positions", []):
+            amt = pos.get("oppose_total", 0) or 0
+            if amt > 0:
+                opp_by_cand[pos["candidate"]] += amt
+    top2 = {name for name, _ in opp_by_cand.most_common(2)}
+    checks.append({
+        "premise": "Largest opposition targets are Juliana Stratton and Alex Bores",
+        "ok": top2 == _EXPECTED_TOP_OPPOSE_TARGETS,
+        "detail": "top opposition targets: "
+        + (", ".join(f"{n} ({_money(a)})" for n, a in opp_by_cand.most_common(2)) or "none"),
+    })
+
+    return checks
+
+
 def run_healthcheck(db, check_images=True):
     """Run all healthcheck sections and return a structured report dict.
 
@@ -300,6 +449,11 @@ def run_healthcheck(db, check_images=True):
     report["races_needing_review"] = races_needing_review(all_races)
     report["unreviewed_contributions"] = unreviewed_contributions(db)
     report["candidates_awaiting_results"] = candidates_awaiting_results(all_races)
+    try:
+        report["notable_patterns_premises"] = notable_patterns_premises(db)
+    except Exception as error:  # editorial check is best-effort; never break the report
+        logging.warning("notable_patterns_premises check failed: %s", error)
+        report["notable_patterns_premises"] = None
 
     if check_images:
         try:
@@ -406,6 +560,20 @@ def _log_report(report):
         lines.append(f"  - {race}")
     if len(awaiting) > 25:
         lines.append(f"  ... and {len(awaiting) - 25} more")
+
+    premises = report.get("notable_patterns_premises")
+    if premises is None:
+        lines.append("\nNotablePatterns premises: (skipped)")
+    else:
+        stale = [c for c in premises if not c["ok"]]
+        lines.append(
+            f"\nNotablePatterns premises: {len(stale)} STALE of {len(premises)}"
+            + (" -- rewrite card copy" if stale else "")
+        )
+        for c in premises:
+            mark = "STALE" if not c["ok"] else "ok"
+            lines.append(f"  - [{mark:5}] {c['premise']}")
+            lines.append(f"            {c['detail']}")
 
     images = report["candidates_without_images"]
     if images is None:
