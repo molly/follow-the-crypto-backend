@@ -247,10 +247,24 @@ def main():
             print("\n✓ Dry run completed")
             return 0
         else:
+            last_run = datetime.now(timezone.utc).isoformat()
             db.client.collection("metadata").document("pipeline").set(
-                {"last_run": datetime.now(timezone.utc).isoformat()}
+                {"last_run": last_run}
             )
             print("\n✓ Pipeline completed successfully")
+
+            # Refresh the live site so the new data is actually served. Passing
+            # the freshly written last_run lets revalidate confirm the origin is
+            # serving it before purging the CDN. A failure here doesn't fail the
+            # pipeline (the data is written; the ISR backstop self-heals), but it
+            # is surfaced loudly so it can be re-run.
+            from revalidate import revalidate
+
+            if not revalidate(expected_last_run=last_run):
+                print(
+                    "\n⚠ Site revalidation incomplete — run `python revalidate.py` "
+                    "manually if the live site looks stale"
+                )
             return 0
 
     except KeyboardInterrupt:
