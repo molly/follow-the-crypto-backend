@@ -20,7 +20,14 @@ def move_inactive_candidates_to_end(candidate_list):
     active = []
     inactive = []
     for candidate in candidate_list:
-        if candidate.get("withdrawn") or candidate.get("declined"):
+        # NB: the field is "withdrew", not "withdrawn" — this check was looking
+        # for a key that is never written, so withdrawn candidates were never
+        # actually being moved to the end.
+        if (
+            candidate.get("withdrew")
+            or candidate.get("died")
+            or candidate.get("declined")
+        ):
             inactive.append(candidate)
         else:
             active.append(candidate)
@@ -46,6 +53,12 @@ def find_index_to_slice(candidate_list, candidate_data):
     for ind, candidate in enumerate(candidate_list):
         name = candidate["name"]
         candidate_summary = candidate_data[name] if name in candidate_data else None
+        if candidate.get("placeholder"):
+            # A placeholder has no summary (so it raises nothing and is always
+            # "below median"), but it's the only thing standing in for a party in
+            # the race. Never let it be trimmed away.
+            supported_indices.append(ind + 1)
+            continue
         if ind > 2 and slice_ind is None:
             if "percentage" in candidate:
                 if candidate["percentage"] < 5 and is_below_median(
@@ -56,7 +69,10 @@ def find_index_to_slice(candidate_list, candidate_data):
             elif is_below_median(candidate_summary, median_raised):
                 # Remove candidates who raised below the median amount IF the vote hasn't happened yet
                 slice_ind = ind
-            elif candidate_summary and candidate_summary.get("withdrew", False):
+            elif candidate_summary and (
+                candidate_summary.get("withdrew", False)
+                or candidate_summary.get("died", False)
+            ):
                 slice_ind = ind
         if candidate_summary and (
             candidate_summary.get("support_total", 0) > 0

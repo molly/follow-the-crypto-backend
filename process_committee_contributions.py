@@ -145,12 +145,15 @@ def get_claimed_contributions(individuals, committee_id):
     return claimed_contributions
 
 
-def process_contribution(contrib, db, donorMap):
-    redacted = is_redacted(contrib, db.occupation_allowlist)
-    if redacted:
-        # Mark to redact later
-        contrib["redacted"] = True
+def resolve_group_and_links(contrib, db, redacted=False):
+    """Resolve a contribution's donor-group key and attach its links.
 
+    Shared by the main processing path and the manual-review merge-back path so
+    verified contributions get the same company/committee/individual links as
+    auto-processed ones (otherwise a reviewed contribution renders unlinked).
+    Mutates contrib to set "link"/"individual_link" when matches are found and
+    returns the resolved group key.
+    """
     # Match this contributor to a tracked individual. Drives both the grouping
     # override below and the per-contribution individual_link. Skip redacted
     # contributors so we don't deanonymize them. Prefer the structured name
@@ -179,15 +182,14 @@ def process_contribution(contrib, db, donorMap):
     # Get group name
     group = None
     if (
-        "contributor_employer" in contrib
-        and contrib["contributor_employer"]
+        contrib.get("contributor_employer")
         and contrib["contributor_employer"] != "N/A"
     ):
         group = contrib["contributor_employer"]
     else:
-        group = contrib["contributor_name"]
+        group = contrib.get("contributor_name")
     if group and group in db.individual_employers:
-        group = contrib["contributor_name"]
+        group = contrib.get("contributor_name")
     elif group in db.company_aliases:
         group = db.company_aliases[group]
 
@@ -241,6 +243,17 @@ def process_contribution(contrib, db, donorMap):
     if matched_individual:
         contrib["individual_link"] = "/2026/individuals/" + matched_individual["id"]
 
+    return group
+
+
+def process_contribution(contrib, db, donorMap):
+    redacted = is_redacted(contrib, db.occupation_allowlist)
+    if redacted:
+        # Mark to redact later
+        contrib["redacted"] = True
+
+    group = resolve_group_and_links(contrib, db, redacted)
+
     # Add group to map if the group isn't already in there
     if group not in donorMap["groups"]:
         donorMap["groups"][group] = {
@@ -248,8 +261,8 @@ def process_contribution(contrib, db, donorMap):
             "rollup": {},
             "total": 0,
         }
-        if link:
-            donorMap["groups"][group]["link"] = link
+        if "link" in contrib:
+            donorMap["groups"][group]["link"] = contrib["link"]
     elif contrib.get("claimed", False):
         # Warn if there are claimed contributions that may duplicate ones coming from the FEC
         if any(
@@ -374,8 +387,20 @@ def process_contribution(contrib, db, donorMap):
     return contrib
 
 
-def process_committee_contributions(db):
-    raw_committee_contributions = db.client.collection("rawContributions").stream()
+def process_committee_contributions(db, committee_id=None):
+    # Pass committee_id to reprocess a single committee (used by commands/fetch_committee.py).
+    # Otherwise every committee's rawContributions doc is streamed and reprocessed.
+    if committee_id is not None:
+        doc = (
+            db.client.collection("rawContributions").document(committee_id).get()
+        )
+        if not doc.exists:
+            raise ValueError(
+                f"No rawContributions document for committee '{committee_id}'"
+            )
+        raw_committee_contributions = [doc]
+    else:
+        raw_committee_contributions = db.client.collection("rawContributions").stream()
     individuals = (
         db.client.collection("constants").document("individuals").get().to_dict()
     )
@@ -506,14 +531,13 @@ def process_committee_contributions(db):
             if status != "verified":
                 continue
 
-            # Get group name (same logic as in process_contribution)
-            group = contrib.get("contributor_employer") or contrib.get(
-                "contributor_name", "UNKNOWN"
+            # Resolve the group key and (re)attach company/committee/individual
+            # links, exactly as the main processing path does. Without this,
+            # verified contributions render unlinked because the link is only
+            # computed in process_contribution, which this merge-back bypasses.
+            group = resolve_group_and_links(
+                contrib, db, contrib.get("redacted", False)
             )
-            if group in db.individual_employers:
-                group = contrib.get("contributor_name", "UNKNOWN")
-            elif group in db.company_aliases:
-                group = db.company_aliases[group]
 
             # Add group if it doesn't exist
             if group not in donorMap["groups"]:

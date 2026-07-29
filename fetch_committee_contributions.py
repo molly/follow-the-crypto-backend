@@ -31,10 +31,18 @@ CONTRIBUTION_FIELDS = [
 ]
 
 
-def aggregate_group_key(contrib):
-    """The employer (or contributor name) under which a small contribution is grouped."""
+def aggregate_group_key(contrib, individual_employers=None):
+    """The employer (or contributor name) under which a small contribution is grouped.
+
+    An "employer" that's actually a non-employer marker (NOT EMPLOYED, RETIRED, SELF, etc.,
+    per db.individual_employers) is not a company, so contributions carrying it are keyed by
+    contributor name instead — otherwise distinct people get lumped into one bogus company
+    rollup. Grouping here happens before the process-time individual_employers guard runs, so
+    the guard can't undo it; the check has to live at the fetch layer.
+    """
+    individual_employers = individual_employers or set()
     employer = (contrib.get("contributor_employer") or "").strip().upper()
-    if not employer or employer == "N/A":
+    if not employer or employer == "N/A" or employer in individual_employers:
         employer = (contrib.get("contributor_name") or "UNKNOWN").strip().upper()
     return employer
 
@@ -63,7 +71,7 @@ def build_aggregate_record(group_name, contribs):
     }
 
 
-def pre_aggregate_small_contributions(contributions):
+def pre_aggregate_small_contributions(contributions, individual_employers=None):
     """
     Contributions below PRE_AGGREGATE_THRESHOLD are grouped by employer (or contributor_name
     if no employer) and stored as a single aggregate record per group. This keeps rawContributions
@@ -76,7 +84,7 @@ def pre_aggregate_small_contributions(contributions):
 
     by_group = defaultdict(list)
     for contrib in small:
-        by_group[aggregate_group_key(contrib)].append(contrib)
+        by_group[aggregate_group_key(contrib, individual_employers)].append(contrib)
 
     aggregated = [
         build_aggregate_record(group_name, contribs)
@@ -86,7 +94,7 @@ def pre_aggregate_small_contributions(contributions):
     return large + aggregated
 
 
-def merge_incremental_contributions(old_transactions, new_contributions):
+def merge_incremental_contributions(old_transactions, new_contributions, individual_employers=None):
     """
     Fold newly-fetched raw contributions into the already-stored (aggregated) transaction list,
     so an incremental run doesn't have to re-fetch and re-aggregate a committee's full history.
@@ -104,7 +112,7 @@ def merge_incremental_contributions(old_transactions, new_contributions):
 
     by_group = defaultdict(list)
     for contrib in small:
-        by_group[aggregate_group_key(contrib)].append(contrib)
+        by_group[aggregate_group_key(contrib, individual_employers)].append(contrib)
 
     for group_name, contribs in by_group.items():
         agg_id = f"empgroup_{group_name}"
@@ -135,7 +143,12 @@ def merge_incremental_contributions(old_transactions, new_contributions):
 def get_ids_to_omit(contribs):
     """Dedupe contributions, refunds, etc."""
     to_omit = set()
-    transaction_ids = set([x["transaction_id"] for x in contribs])
+    # Some FEC records come through with a null transaction_id. They have no ".N" suffix to
+    # parse, so they can't take part in the parent/child dedup below — and re.match would
+    # raise on None.
+    transaction_ids = set(
+        x["transaction_id"] for x in contribs if x.get("transaction_id")
+    )
     for t_id in transaction_ids:
         # There are sometimes 2+ transactions with IDs like SA17.4457 and SA17.4457.0, in which case we omit the former.
         # These are typically instances in which the committee has reported the dollar equivalent and the in-kind
@@ -150,26 +163,33 @@ def get_ids_to_omit(contribs):
 
 def should_omit(contrib, other_contribs, ids_to_omit):
     """Omit any duplicate contributions, refunds, etc."""
-    if contrib["transaction_id"] in ids_to_omit:
-        # Manually excluded transaction, or a parent of a more granularly reported transaction
-        return True
-    if contrib["transaction_id"] in other_contribs:
-        # Duplicate of a transaction we've already encountered
-        return True
+    transaction_id = contrib.get("transaction_id")
+    # A null transaction_id identifies nothing, so it can't mark a manual exclusion or a
+    # duplicate. Two null-id records are not the same contribution; matching them against
+    # each other would silently drop all but the first.
+    if transaction_id:
+        if transaction_id in ids_to_omit:
+            # Manually excluded transaction, or a parent of a more granularly reported transaction
+            return True
+        if transaction_id in other_contribs:
+            # Duplicate of a transaction we've already encountered
+            return True
     if contrib["line_number"] in ["15", "16"]:
         return True
     if contrib["line_number"] == "17":
+        # Line 17 is "Other Federal Receipts" (dividends, interest, offsets, etc.), which are
+        # generally not contributions and so omitted. The exceptions we keep are real
+        # contributions that get reported here: money into a hybrid PAC's non-contribution
+        # ("Carey") account, and any record whose receipt type explicitly names it a contribution.
         if "receipt_type_full" not in contrib:
-            if contrib.get("transaction_id", "") == "SA17.5207":
-                print(f"{contrib["contribution_receipt_date"]} - {contrib["contributor_name"]}: {contrib["contribution_receipt_amount"]} to {contrib["committee"]["name"]}. {contrib["pdf_url"]}")
-                print(contrib.get("transaction_id"))
-                return False
-        else:
-            receipt_type_full = (contrib.get("receipt_type_full", "") or "").upper()
-            if "CONTRIBUTION" in receipt_type_full and "INTEREST" not in receipt_type_full:
-                print(f"{contrib["contribution_receipt_date"]} - {contrib["contributor_name"]}: {contrib["contribution_receipt_amount"]} to {contrib["committee"]["name"]}. {contrib["pdf_url"]}")
-                print(receipt_type_full)
-                return False
+            # Efiled records don't carry a receipt_type_full, so we can't classify them here.
+            # SA17.5207 was manually verified as a real contribution.
+            return contrib.get("transaction_id", "") != "SA17.5207"
+        receipt_type_full = (contrib.get("receipt_type_full", "") or "").upper()
+        if "CAREY" in receipt_type_full:
+            return False
+        if "CONTRIBUTION" in receipt_type_full and "INTEREST" not in receipt_type_full:
+            return False
         return True
     memo = (contrib.get("memo_text", "") or "").upper()
     receipt_type = (contrib.get("receipt_type_full", "") or "").upper()
@@ -355,11 +375,13 @@ def update_committee_contributions(db, session, full=False):
         # real IDs survive even after small contributions are folded into empgroup_ records.
         if incremental:
             transactions_for_storage = merge_incremental_contributions(
-                old_transactions, fetched
+                old_transactions, fetched, db.individual_employers
             )
             known_ids = old_known_ids.union(fetched_ids)
         else:
-            transactions_for_storage = pre_aggregate_small_contributions(fetched)
+            transactions_for_storage = pre_aggregate_small_contributions(
+                fetched, db.individual_employers
+            )
             known_ids = set(fetched_ids)
 
         db.client.collection("rawContributions").document(committee_id).set(

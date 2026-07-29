@@ -64,11 +64,19 @@ def summarize_races(db, session):
 
             # Create set for each unique candidate in any sub-race in this race. This will always be equivalent to
             # Object.keys(candidates_data) and is just maintained for convenience.
+            #
+            # Placeholder entries are excluded throughout: they stand in for a
+            # nominee who hasn't been named yet, so there is no person to
+            # summarize, no FEC record to look up, and no money to attribute.
+            # Leaving them in would send their slot name ("Democratic candidate
+            # TBD") to the FEC candidates/search endpoint, where compare_names
+            # could fuzzy-match it onto an unrelated filer.
             try:
                 candidates = {
                     candidate["name"]
                     for race in race_data["races"]
                     for candidate in race["candidates"]
+                    if not candidate.get("placeholder")
                 }
             except KeyError as e:
                 logging.error(f"Missing race data for {state} {race_id}: {e}")
@@ -277,6 +285,10 @@ def summarize_races(db, session):
             for race in race_data["races"]:
                 # Iterate through each candidate in the subrace. These should generally be in reverse chrono order.
                 for candidate in race["candidates"]:
+                    if candidate.get("placeholder"):
+                        # No summary entry exists for a placeholder, so there is
+                        # nothing to attach a subrace or party to.
+                        continue
                     # Add this subrace to their list of involved races
                     race_type = race.get("type")
                     if race_type is None:
@@ -304,6 +316,23 @@ def summarize_races(db, session):
                             ] = candidate["declinedReason"]
                     if "declared" in candidate and candidate["declared"] is False:
                         candidates_data[candidate["name"]]["declared"] = False
+                    # `died` is set by hand in the race editor, so unlike
+                    # `withdrew` it only ever lives on the race candidate. Lift it
+                    # onto the summary so Outcome/Spending can read it without
+                    # walking the races.
+                    if candidate.get("died") is True:
+                        candidates_data[candidate["name"]]["died"] = True
+
+            # Map FEC candidate_id -> common name for expenditures whose name
+            # strings don't line up with the FEC candidate record (e.g. compound
+            # surnames: efile reports "McClain Delaney" while the FEC record
+            # orders it "Delaney, April McClain"). candidate_id is normalized
+            # through candidate_aliases on both sides, so it's the stable key.
+            candidate_key_by_id = {
+                cand["candidate_id"]: key
+                for key, cand in candidates_data.items()
+                if cand.get("candidate_id")
+            }
 
             # Iterate through each expenditure in this race
             for expenditure_id in race_expenditures:
@@ -316,33 +345,40 @@ def summarize_races(db, session):
                     # Ideally this will match their FEC_name
                     candidate_key = names[expenditure["candidate_name"]]
                 except KeyError:
-                    # If it doesn't, try to find the candidate with a matching last name
-                    k = None
-                    ks = {
-                        key
-                        for key in names
-                        if expenditure["candidate_last_name"].upper() in key
-                    }
-                    if len(ks) == 1:
-                        k = ks.pop()
-                    elif len(ks) > 1:
-                        # If there are multiple candidates with the same last name, try to narrow down by first name
+                    # Prefer an exact candidate_id match before falling back to
+                    # fuzzy name matching — it's robust to name-format quirks
+                    # like compound surnames that the substring check below misses.
+                    candidate_key = candidate_key_by_id.get(
+                        expenditure.get("candidate_id")
+                    )
+                    if candidate_key is None:
+                        # Otherwise, try to find the candidate with a matching last name
                         k = None
-                        filtered = [
-                            k
-                            for k in ks
-                            if expenditure["candidate_first_name"].upper() in k
-                        ]
-                        if len(filtered) == 1:
-                            k = filtered[0]
-                    if k is None:
-                        # TODO: We're going to have to figure out something else if we end up here.
-                        logging.error(
-                            f"Having trouble locating candidate named in expenditure: {expenditure['candidate_name']} in {state} {race_id}"
-                        )
-                        continue
-                    else:
-                        candidate_key = names[k]
+                        ks = {
+                            key
+                            for key in names
+                            if expenditure["candidate_last_name"].upper() in key
+                        }
+                        if len(ks) == 1:
+                            k = ks.pop()
+                        elif len(ks) > 1:
+                            # If there are multiple candidates with the same last name, try to narrow down by first name
+                            k = None
+                            filtered = [
+                                k
+                                for k in ks
+                                if expenditure["candidate_first_name"].upper() in k
+                            ]
+                            if len(filtered) == 1:
+                                k = filtered[0]
+                        if k is None:
+                            # TODO: We're going to have to figure out something else if we end up here.
+                            logging.error(
+                                f"Having trouble locating candidate named in expenditure: {expenditure['candidate_name']} in {state} {race_id}"
+                            )
+                            continue
+                        else:
+                            candidate_key = names[k]
 
                 # Initialize fields if necessary
                 if "expenditure_races" not in candidates_data[candidate_key]:
@@ -352,10 +388,20 @@ def summarize_races(db, session):
 
                 # Add the expenditure's sub-race to the candidate's list of expenditure_races.
                 stored_subrace = expenditure.get("subrace", None)
+
+                # Sort races descending by date so get_expenditure_race_type() finds the nearest
+                # future race correctly regardless of how races were manually ordered in Firestore.
+                sorted_races = sorted(
+                    race_data.get("races", []),
+                    key=lambda r: r.get("date") or "",
+                    reverse=True,
+                )
+
                 if expenditure.get("election_type"):
                     # election_type is available: recompute deterministically from the FEC code.
-                    # Races list not needed — the code (P/G/R/S/etc.) is sufficient.
-                    subrace = get_expenditure_race_type(expenditure, None)
+                    # The races list is only consulted for "O" (Other) codes, which no race can
+                    # match and which therefore have to be resolved by date.
+                    subrace = get_expenditure_race_type(expenditure, sorted_races)
                     if not subrace:
                         subrace = stored_subrace
                     elif subrace != stored_subrace:
@@ -366,14 +412,6 @@ def summarize_races(db, session):
                     # Efiled expenditure: no election_type, trust the stored subrace.
                     subrace = stored_subrace
                     if subrace is None:
-                        # No stored subrace; try date-based matching. Sort races descending
-                        # by date so get_expenditure_race_type() finds the nearest future race
-                        # correctly regardless of how races were manually ordered in Firestore.
-                        sorted_races = sorted(
-                            race_data.get("races", []),
-                            key=lambda r: r.get("date") or "",
-                            reverse=True,
-                        )
                         subrace = get_expenditure_race_type(expenditure, sorted_races)
                         if subrace:
                             db.client.collection("expenditures").document("all").update(

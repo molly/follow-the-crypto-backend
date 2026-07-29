@@ -8,6 +8,8 @@ import threading
 import time
 from unidecode import unidecode
 
+from states import special_election_year
+
 logging.getLogger("backoff").addHandler(logging.StreamHandler())
 
 # The FEC API limits this key to 60 requests/minute (shared across every
@@ -255,9 +257,77 @@ def compare_names_lastfirst(name, last_first):
     return first_similar and last_similar
 
 
+def match_race_by_date(expenditure, races):
+    """Find the sub-race an expenditure belongs to by matching its date against race dates.
+
+    Used for expenditures that carry no usable election_type: efiled expenditures (which have
+    none at all) and expenditures the filer coded as "O" (Other), which is not a sub-race type
+    any race can have. Returns the type of the earliest race the expenditure predates, or None.
+    """
+    expenditure_date = expenditure.get("dissemination_date")
+    if expenditure_date is None:
+        expenditure_date = expenditure.get("expenditure_date", None)
+        if expenditure_date is None:
+            return None
+
+    for race in reversed(races):
+        for candidate in race["candidates"]:
+            if compare_names(
+                expenditure.get(
+                    "candidate_last_name", expenditure.get("candidate_name")
+                ),
+                candidate["name"],
+            ):
+                race_date = race.get("date", None)
+                if race_date is None or race_date >= expenditure_date:
+                    race_type = race.get("type")
+                    if race_type is None:
+                        logging.warning(f"Race missing 'type' field: {race}")
+                    expenditure["subrace"] = race_type
+                    return race_type
+
+    # If we couldn't find the race type in the first loop, try again and look for typos
+    for race in reversed(races):
+        for candidate in race["candidates"]:
+            if compare_names(
+                expenditure.get(
+                    "candidate_last_name", expenditure.get("candidate_name")
+                ),
+                candidate["name"],
+                True,
+            ):
+                race_date = race.get("date", None)
+                if race_date and race_date >= expenditure_date:
+                    expenditure["subrace"] = race.get("type")
+                    return race.get("type")
+    return None
+
+
+def expenditure_seat(expenditure):
+    """Base seat id ("{state}-{office}[-district]") for an expenditure, or None.
+
+    Mirrors the seat portion of process_committee_expenditures.get_race_name, without
+    the "-special" suffix, so both can consult SPECIAL_ELECTIONS with the same key.
+    """
+    state = expenditure.get("candidate_office_state")
+    office = expenditure.get("candidate_office")
+    if not state or not office:
+        return None
+    seat = f"{state}-{office}"
+    district = expenditure.get("candidate_office_district")
+    try:
+        if district and int(district) != 0:
+            seat += f"-{district}"
+    except (TypeError, ValueError):
+        pass
+    return seat
+
+
 def get_expenditure_race_type(expenditure, races=None):
     subrace = expenditure.get("subrace", None)
-    if subrace is not None:
+    if subrace is not None and subrace != "other":
+        # "other" is never authoritative: no race has a sub-race of that type, so an expenditure
+        # left tagged that way is invisible on the race page. Fall through and try to resolve it.
         return subrace
 
     election_type = expenditure.get("election_type", None)
@@ -269,48 +339,24 @@ def get_expenditure_race_type(expenditure, races=None):
             # If the expenditure doesn't have an election type (as with efiled expenditures), we have to try to figure it
             # out later by comparing dates.
             return None
-        else:
-            expenditure_date = expenditure.get("dissemination_date")
-            if expenditure_date is None:
-                expenditure_date = expenditure.get("expenditure_date", None)
-                if expenditure_date is None:
-                    return None
-            for race in reversed(races):
-                for candidate in race["candidates"]:
-                    if compare_names(
-                        expenditure.get(
-                            "candidate_last_name", expenditure.get("candidate_name")
-                        ),
-                        candidate["name"],
-                    ):
-                        race_date = race.get("date", None)
-                        if race_date is None or race_date >= expenditure_date:
-                            race_type = race.get("type")
-                            if race_type is None:
-                                logging.warning(
-                                    f"Race missing 'type' field: {race}"
-                                )
-                            expenditure["subrace"] = race_type
-                            return race_type
-
-            # If we couldn't find the race type in the first loop, try again and look for typos
-            for race in reversed(races):
-                for candidate in race["candidates"]:
-                    if compare_names(
-                        expenditure.get(
-                            "candidate_last_name", expenditure.get("candidate_name")
-                        ),
-                        candidate["name"],
-                        True,
-                    ):
-                        race_date = race.get("date", None)
-                        if race_date and race_date >= expenditure_date:
-                            expenditure["subrace"] = race.get("type")
-                            return race.get("type")
-            return None
+        return match_race_by_date(expenditure, races)
     else:
         if election_type == "GR":
             return "general_runoff"
+        # "SP" is a special primary: a stand-alone primary held to fill a nomination the
+        # regular primary didn't settle, e.g. South Carolina picking a replacement after
+        # its Republican nominee died. It's a sub-race of the REGULAR race, sitting
+        # between the primary and any primary runoff.
+        #
+        # On a seat that holds a full special election, though, "SP" means something
+        # else: it's that special's own primary, and get_race_name has already routed
+        # the expenditure to the "<seat>-special" race, whose primary is typed "primary".
+        # Gate on SPECIAL_ELECTIONS membership (not the current cycle) to match how
+        # get_race_name routes every "S..." code on those seats.
+        if re.fullmatch(r"SP\d*", election_type) and not special_election_year(
+            expenditure_seat(expenditure)
+        ):
+            return "special_primary"
         election_type = election_type[0]
     if election_type == "G":
         return "general"
@@ -325,13 +371,24 @@ def get_expenditure_race_type(expenditure, races=None):
             split_type = re.split("[- ]", election_type_full)
             if len(split_type) > 1:
                 if split_type[1] == "primary":
-                    return "primary"
+                    # Same split as the "SP" code above: a special primary on a seat
+                    # with no special election is a sub-race of the regular race.
+                    if special_election_year(expenditure_seat(expenditure)):
+                        return "primary"
+                    return "special_primary"
                 elif split_type[1] == "runoff":
                     return "primary_runoff"
                 elif split_type[1] == "general":
                     return "general"
         return "special"
     if election_type == "O":
+        # The filer coded this "Other", which is not a sub-race any race can have. Fall back to
+        # matching the expenditure's date against the race calendar; if that fails there's nothing
+        # better to say than "other".
+        if races is not None:
+            matched = match_race_by_date(expenditure, races)
+            if matched:
+                return matched
         return "other"
     else:
         print("Unknown election type: " + election_type)

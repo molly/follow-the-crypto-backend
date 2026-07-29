@@ -48,7 +48,8 @@ to_skip = {
     "Matthew Sin",
     "Lewis Mizrahi",
     "Jared Kane",
-    "Nathan Tracy"
+    "Nathan Tracy",
+    "Wilfred Curioso"
 }
 
 
