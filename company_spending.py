@@ -1,9 +1,14 @@
+import logging
+import re
+
+import requests
+
 from fetch_committee_contributions import (
     should_omit,
     get_ids_to_omit,
     EARLY_STOP_PATIENCE,
 )
-from utils import FEC_fetch, pick
+from utils import FEC_fetch, is_gateway_error, pick
 
 MIN_CONTRIBUTION_AMOUNT = 1000
 
@@ -79,6 +84,43 @@ def parse_search_id(term):
     return term, False
 
 
+def narrow_search_values(search_values):
+    """Reduce each multi-word search term to its leading word.
+
+    The FEC's full-text search can exceed the API gateway's timeout on long, common phrases
+    ("capital management" matches an enormous slice of the employer index). A company's
+    leading word is the distinctive part of its name, so searching that alone returns a
+    superset we can filter back down with the original terms.
+
+    Returns None if no term has more than one word, i.e. there is nothing to narrow.
+    """
+    narrowed = []
+    for value in search_values:
+        first_word = value.split()[0] if value.split() else value
+        if first_word not in narrowed:
+            narrowed.append(first_word)
+    if narrowed == list(search_values):
+        return None
+    return narrowed
+
+
+def _words(value):
+    return set(re.findall(r"[A-Z0-9]+", (value or "").upper()))
+
+
+def matches_any_search_term(contrib, terms):
+    """Check a contribution against search terms the way the FEC's own search would.
+
+    The FEC's full-text search requires every word of the term to be present, in any order
+    and not necessarily adjacent ("global coinbase" matches "COINBASE GLOBAL, INC."), so
+    this reproduces that rather than looking for the term as a literal substring.
+    """
+    fields = _words(contrib.get("contributor_name")) | _words(
+        contrib.get("contributor_employer")
+    )
+    return any(_words(term) <= fields for term in terms)
+
+
 def is_exact_match(contrib, exact_terms):
     """Check if contributor_name or contributor_employer exactly matches any exact term (case-insensitive)."""
     upper_terms = {t.upper() for t in exact_terms}
@@ -100,7 +142,13 @@ def process_contribution(contrib):
 
 
 def _should_skip(
-    contrib, contrib_ids, ids_to_omit, exact_terms, search_param, occupation_allowlist
+    contrib,
+    contrib_ids,
+    ids_to_omit,
+    exact_terms,
+    search_param,
+    occupation_allowlist,
+    required_terms=None,
 ):
     """Check if a contribution should be skipped."""
     if should_omit(contrib, contrib_ids, ids_to_omit):
@@ -108,6 +156,10 @@ def _should_skip(
     if abs(contrib.get("contribution_receipt_amount", 0)) < MIN_CONTRIBUTION_AMOUNT:
         return True
     if exact_terms and not is_exact_match(contrib, exact_terms):
+        return True
+    # Set when a narrowed search stood in for the original terms: reapplies the matching the
+    # FEC would have done, so the wider search doesn't pull in false positives.
+    if required_terms and not matches_any_search_term(contrib, required_terms):
         return True
     # Skip contributions to WinRed & ActBlue (same as in individuals.py)
     if contrib.get("committee_id") in ["C00694323", "C00401224"]:
@@ -183,7 +235,7 @@ def update_spending_by_company(db, session, full=False):
         # Initialize with company-specific duplicates from database (same as individuals.py)
         ids_to_omit = set(db.duplicate_contributions.get(str_id, []))
 
-        def handle_page(results, efiled, exact_terms, search_param):
+        def handle_page(results, efiled, exact_terms, search_param, required_terms):
             """Process one page; return True if it held no transaction IDs we didn't already have."""
             ids_to_omit.update(get_ids_to_omit(results))
             page_has_new = False
@@ -198,6 +250,7 @@ def update_spending_by_company(db, session, full=False):
                     exact_terms,
                     search_param,
                     db.occupation_allowlist,
+                    required_terms,
                 ):
                     continue
                 if incremental and tid in old_ids:
@@ -210,7 +263,7 @@ def update_spending_by_company(db, session, full=False):
                 fetched_ids.add(tid)
             return not page_has_new
 
-        def fetch_processed(search_param, search_values, exact_terms):
+        def fetch_processed(search_param, search_values, exact_terms, required_terms):
             last_index = None
             last_contribution_receipt_date = None
             contribs_count = 0
@@ -233,7 +286,9 @@ def update_spending_by_company(db, session, full=False):
                 if not data:
                     continue
                 contribs_count += data["pagination"]["per_page"]
-                page_dry = handle_page(data["results"], False, exact_terms, search_param)
+                page_dry = handle_page(
+                    data["results"], False, exact_terms, search_param, required_terms
+                )
                 if incremental:
                     dry_streak = dry_streak + 1 if page_dry else 0
                     if dry_streak >= EARLY_STOP_PATIENCE:
@@ -246,7 +301,7 @@ def update_spending_by_company(db, session, full=False):
                         "last_indexes"
                     ]["last_contribution_receipt_date"]
 
-        def fetch_efiled(search_param, search_values, exact_terms):
+        def fetch_efiled(search_param, search_values, exact_terms, required_terms):
             page = 1
             contribs_count = 0
             dry_streak = 0
@@ -267,7 +322,9 @@ def update_spending_by_company(db, session, full=False):
                 if not data:
                     continue
                 contribs_count += data["pagination"]["per_page"]
-                page_dry = handle_page(data["results"], True, exact_terms, search_param)
+                page_dry = handle_page(
+                    data["results"], True, exact_terms, search_param, required_terms
+                )
                 if incremental:
                     dry_streak = dry_streak + 1 if page_dry else 0
                     if dry_streak >= EARLY_STOP_PATIENCE:
@@ -277,9 +334,60 @@ def update_spending_by_company(db, session, full=False):
                 else:
                     page += 1
 
+        def run_search(fetch, search_param, search_values, exact_terms):
+            """Run a paginated search, falling back to narrowed terms on a gateway timeout.
+
+            A gateway timeout is deterministic for a given phrase, so a plain retry would
+            fail the same way; the narrowed search is the only thing that gets the data. If
+            that fails too, the company keeps whatever the other search jobs found rather
+            than the whole task dying.
+            """
+            try:
+                fetch(search_param, search_values, exact_terms, None)
+                return
+            except requests.exceptions.HTTPError as e:
+                if not is_gateway_error(e):
+                    raise
+                narrowed = narrow_search_values(search_values)
+                if not narrowed:
+                    logging.error(
+                        "FEC gateway timed out on %s %s=%s for company %s, and the terms "
+                        "can't be narrowed further. Skipping this search; %s's data may be "
+                        "incomplete.",
+                        fetch.__name__,
+                        search_param,
+                        search_values,
+                        str_id,
+                        company["name"],
+                    )
+                    return
+                logging.warning(
+                    "FEC gateway timed out on %s %s=%s for company %s. Retrying with "
+                    "narrowed terms %s and filtering results back to the original terms.",
+                    fetch.__name__,
+                    search_param,
+                    search_values,
+                    str_id,
+                    narrowed,
+                )
+            try:
+                fetch(search_param, narrowed, exact_terms, list(search_values))
+            except requests.exceptions.HTTPError as e:
+                if not is_gateway_error(e):
+                    raise
+                logging.error(
+                    "FEC gateway also timed out on the narrowed search %s %s=%s for "
+                    "company %s. Skipping this search; %s's data may be incomplete.",
+                    fetch.__name__,
+                    search_param,
+                    narrowed,
+                    str_id,
+                    company["name"],
+                )
+
         for search_param, search_values, exact_terms in search_jobs:
-            fetch_processed(search_param, search_values, exact_terms)
-            fetch_efiled(search_param, search_values, exact_terms)
+            run_search(fetch_processed, search_param, search_values, exact_terms)
+            run_search(fetch_efiled, search_param, search_values, exact_terms)
 
         # Incremental unions the new contributions onto what's stored; full overwrites.
         merged = (old_contributions + fetched) if incremental else fetched

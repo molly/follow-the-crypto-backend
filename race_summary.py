@@ -1,6 +1,12 @@
 import logging
 import re
-from utils import FEC_fetch, compare_names, get_expenditure_race_type, get_sector_keys
+from utils import (
+    FEC_fetch,
+    compare_names,
+    compare_names_lastfirst,
+    get_expenditure_race_type,
+    get_sector_keys,
+)
 from states import SINGLE_MEMBER_STATES
 from unidecode import unidecode
 from race_utils import get_all_races, update_race
@@ -16,6 +22,39 @@ def trim_name(name):
         # FEC API won't accept queries of < 3 characters, so short names like "Xu" throw errors
         return unidecode(name)
     return unidecode(last_name)
+
+
+def find_candidate_in_other_district(session, session_params, common_name):
+    """Look a House candidate up statewide, ignoring the district filter.
+
+    The main candidates/search query is filtered to the race's district, so a
+    candidate whose FEC record carries a different district than the race we have
+    them rostered in is never returned — they end up with no candidate_id, and
+    every expenditure naming them falls off the race page. Search the same state,
+    office and cycle without the district, and accept a result only when both
+    names reconcile, so a same-surname candidate elsewhere in the state can't be
+    picked up by mistake.
+    """
+    params = {
+        key: value for key, value in session_params.items() if key != "district"
+    }
+    params["q"] = [trim_name(common_name)]
+    results = FEC_fetch(
+        session,
+        f"statewide candidate lookup for {common_name}",
+        "https://api.open.fec.gov/v1/candidates/search",
+        params,
+    )
+    if not results:
+        return None
+    matches = [
+        result
+        for result in results["results"]
+        if compare_names_lastfirst(common_name, result["name"])
+    ]
+    if len(matches) != 1:
+        return None
+    return matches[0]
 
 
 def summarize_races(db, session):
@@ -128,7 +167,7 @@ def summarize_races(db, session):
                 "office": race_id_split[0],
                 "state": state,
                 "election_year": election_year,
-                "q": map(trim_name, candidates),
+                "q": sorted(trim_name(candidate) for candidate in candidates),
                 "per_page": 50,
             }
             if (
@@ -212,10 +251,20 @@ def summarize_races(db, session):
                 # Map FEC name to common name
                 names[FEC_candidate_data["name"]] = candidate_race_name
 
-                # Add FEC data to candidate data map
+                # Add FEC data to candidate data map. Normalize the id through
+                # candidateAliases: the candidates/search result can name a
+                # candidate under an id that isn't the one the rest of the data
+                # is keyed on (in NJ-08 the FEC returns Rob Menendez under both
+                # his own id and his father's old NJ-08 id, and his committee's
+                # receipts file under the father's). Expenditures and
+                # recipientDetails are already normalized this way, so the roster
+                # has to be too, or the race page can't match either against it.
                 candidates_data[candidate_race_name][
                     "candidate_id"
-                ] = FEC_candidate_data["candidate_id"]
+                ] = db.candidate_aliases.get(
+                    FEC_candidate_data["candidate_id"],
+                    FEC_candidate_data["candidate_id"],
+                )
                 if FEC_candidate_data["party"]:
                     candidates_data[candidate_race_name]["party"] = FEC_candidate_data[
                         "party"
@@ -227,7 +276,14 @@ def summarize_races(db, session):
                     "name"
                 ]
 
-            for entry in candidates_data.values():
+            # Non-withdrawn entries first: when a race lists the same person
+            # twice (e.g. "Frederica Wilson" running and "Frederica S. Wilson"
+            # withdrawn), the FEC record has to land on the entry that survives
+            # the withdrawal pruning below. Set iteration order isn't stable
+            # across runs, so without this the id would land on a coin flip.
+            for entry in sorted(
+                candidates_data.values(), key=lambda e: bool(e.get("withdrew"))
+            ):
                 if "candidate_id" not in entry:
                     if entry["common_name"] and entry["common_name"] in db.candidates:
                         # A few weird edge cases are in the candidates constant, get that data here
@@ -261,9 +317,50 @@ def summarize_races(db, session):
                             "FEC_name"
                         ] = FEC_candidate_data["name"]
                     else:
-                        logging.debug(
-                            f"Having trouble locating FEC candidate: {entry['common_name']} in {state}-{race_id}"
+                        # The candidate may be filed under another district (a
+                        # switch mid-cycle, or an FEC record that disagrees with
+                        # the district we have the race under). Retry statewide
+                        # before giving up.
+                        FEC_candidate_data = (
+                            find_candidate_in_other_district(
+                                session, params, entry["common_name"]
+                            )
+                            if "district" in params
+                            else None
                         )
+                        if FEC_candidate_data is None:
+                            logging.debug(
+                                f"Having trouble locating FEC candidate: {entry['common_name']} in {state}-{race_id}"
+                            )
+                        elif FEC_candidate_data["name"] in names:
+                            # Another roster entry already holds this FEC record,
+                            # so the two are the same person listed twice under
+                            # different spellings. Leave the duplicate unmatched
+                            # rather than pointing both at one candidate_id.
+                            logging.warning(
+                                f"{state}-{race_id} lists both "
+                                f"{names[FEC_candidate_data['name']]!r} and "
+                                f"{entry['common_name']!r}, which both resolve to "
+                                f"{FEC_candidate_data['candidate_id']}. Merge the "
+                                f"duplicate in the race editor."
+                            )
+                        else:
+                            logging.info(
+                                f"Matched {entry['common_name']} in {state}-{race_id} to "
+                                f"{FEC_candidate_data['candidate_id']}, whose FEC record is "
+                                f"filed in district {FEC_candidate_data.get('district')}"
+                            )
+                            names[FEC_candidate_data["name"]] = entry["common_name"]
+                            entry["candidate_id"] = db.candidate_aliases.get(
+                                FEC_candidate_data["candidate_id"],
+                                FEC_candidate_data["candidate_id"],
+                            )
+                            if FEC_candidate_data["party"]:
+                                entry["party"] = FEC_candidate_data["party"][0]
+                            entry["incumbent_challenge"] = FEC_candidate_data[
+                                "incumbent_challenge"
+                            ]
+                            entry["FEC_name"] = FEC_candidate_data["name"]
 
                 if candidates_data[entry["common_name"]].get("candidate_id"):
                     candidate_id = candidates_data[entry["common_name"]]["candidate_id"]
@@ -563,6 +660,10 @@ def summarize_races(db, session):
                     # This candidate was not found in the list of candidates for this
                     continue
                 candidate_key = names[FEC_name]
+                if candidate_key not in candidates_data:
+                    # The candidate was pruned above as a withdrawal with no
+                    # spending, so there is no summary left to total.
+                    continue
                 candidates_data[candidate_key]["raised_total"] = total_result[
                     "receipts"
                 ]

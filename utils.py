@@ -31,10 +31,26 @@ def _fec_throttle():
         _fec_last_request_time = time.monotonic()
 
 
+def _is_lazy_iterable(value):
+    """True for one-shot iterables (generators, map/filter objects, iterators).
+
+    Strings, bytes, lists, tuples, sets and dicts can be read repeatedly, so they
+    are left alone.
+    """
+    if isinstance(value, (str, bytes, list, tuple, set, dict)):
+        return False
+    return hasattr(value, "__iter__") and iter(value) is value
+
+
 def _fec_response_is_cached(session, url, params, headers):
     """True if a CachedSession already has this request stored (so it won't hit the network)."""
     cache = getattr(session, "cache", None)
     if cache is None:
+        return False
+    # A stored entry doesn't mean the request skips the network: requests-cache honors a
+    # Cache-Control: no-cache request header by refetching. Those calls count against the
+    # rate limit, so they have to be throttled like any other live request.
+    if "no-cache" in (headers.get("Cache-Control") or ""):
         return False
     try:
         prepared = session.prepare_request(
@@ -111,6 +127,20 @@ def get_sector_keys(entity_sector):
         return ["all"]
 
 
+# Gateway-level failures: the FEC's API gateway gives up on a slow upstream query rather
+# than the query itself being malformed. A few are worth retrying in case the slowness was
+# incidental, but a query that's simply too heavy times out identically every time, so the
+# retries are kept short and the caller is expected to fall back to a cheaper query.
+GATEWAY_STATUSES = {502, 503, 504}
+GATEWAY_MAX_ATTEMPTS = 3
+GATEWAY_RETRY_SECONDS = 5
+
+
+def is_gateway_error(e):
+    resp = getattr(e, "response", None)
+    return resp is not None and resp.status_code in GATEWAY_STATUSES
+
+
 def fatal_code(e):
     try:
         return e.response.status_code == 422 or e.response.status_code >= 500
@@ -163,22 +193,32 @@ def FEC_fetch(session, description, url, params={}):
     if "efile" in url:
         headers["Cache-Control"] = "no-cache"
     full_params = {
-        **params,
-        "api_key": os.environ["FEC_API_KEY"],
+        # Materialize lazy values (e.g. a map() of candidate surnames). A one-shot
+        # iterator is exhausted by the first thing that reads it — the cache-key
+        # check below, or a retried attempt — after which the param silently
+        # disappears from the request, broadening the query instead of failing.
+        key: list(value) if _is_lazy_iterable(value) else value
+        for key, value in params.items()
     }
-    # Only throttle requests that will actually reach the FEC; cached responses
-    # don't count against the rate limit.
-    if not _fec_response_is_cached(session, url, full_params, headers):
-        _fec_throttle()
-    r = session.get(
-        url,
-        params=full_params,
-        headers=headers,
-        # Heavy schedule_a queries (full two-year period + sort) can take well over
-        # 30s; too short a timeout makes them retry, and a timed-out request still
-        # counts against the rate limit, so short timeouts feed a 429 death spiral.
-        timeout=60,
-    )
+    full_params["api_key"] = os.environ["FEC_API_KEY"]
+    for attempt in range(1, GATEWAY_MAX_ATTEMPTS + 1):
+        # Only throttle requests that will actually reach the FEC; cached responses
+        # don't count against the rate limit.
+        if not _fec_response_is_cached(session, url, full_params, headers):
+            _fec_throttle()
+        r = session.get(
+            url,
+            params=full_params,
+            headers=headers,
+            # Heavy schedule_a queries (full two-year period + sort) can take well over
+            # 30s; too short a timeout makes them retry, and a timed-out request still
+            # counts against the rate limit, so short timeouts feed a 429 death spiral.
+            timeout=60,
+        )
+        if r.status_code in GATEWAY_STATUSES and attempt < GATEWAY_MAX_ATTEMPTS:
+            time.sleep(GATEWAY_RETRY_SECONDS)
+            continue
+        break
     if r.status_code == 404:
         return None
     r.raise_for_status()
@@ -270,12 +310,25 @@ def match_race_by_date(expenditure, races):
         if expenditure_date is None:
             return None
 
+    # Prefer the roster-resolved name when one has been stamped on the row (see
+    # build_roster_maps). The filer-entered name fields can hold a different
+    # surname entirely -- FEC files Ashley Hinson under her spouse's name, with
+    # "ASHLEY HINSON" packed into candidate_first_name -- which matches no
+    # roster entry, leaving the sub-race unresolved and the spending orphaned.
+    # Chained with `or` rather than a .get default: these fields are routinely
+    # present but null, so a default would never be reached.
+    candidate_name = (
+        expenditure.get("candidate_common_name")
+        or expenditure.get("candidate_last_name")
+        or expenditure.get("candidate_name")
+    )
+    if not candidate_name:
+        return None
+
     for race in reversed(races):
         for candidate in race["candidates"]:
             if compare_names(
-                expenditure.get(
-                    "candidate_last_name", expenditure.get("candidate_name")
-                ),
+                candidate_name,
                 candidate["name"],
             ):
                 race_date = race.get("date", None)
@@ -290,9 +343,7 @@ def match_race_by_date(expenditure, races):
     for race in reversed(races):
         for candidate in race["candidates"]:
             if compare_names(
-                expenditure.get(
-                    "candidate_last_name", expenditure.get("candidate_name")
-                ),
+                candidate_name,
                 candidate["name"],
                 True,
             ):
@@ -401,16 +452,12 @@ def get_beneficiaries(contributionGroup, recipientCommittee, nonCandidateCommitt
     )
     if committee_id in nonCandidateCommittees:
         return [committee_id]
-    if (
-        recipientCommittee
-        and "candidate_ids" in recipientCommittee
-        and len(recipientCommittee["candidate_ids"]) > 0
-    ):
+    # candidate_ids can be absent, null, or empty on either side — the FEC returns
+    # null for committees with no candidate, and we null out IDs that aren't real
+    # candidate IDs.
+    if recipientCommittee and (recipientCommittee.get("candidate_ids") or []):
         return recipientCommittee["candidate_ids"]
-    elif (
-        "candidate_ids" in contributionGroup
-        and len(contributionGroup["candidate_ids"]) > 0
-    ):
+    elif contributionGroup.get("candidate_ids") or []:
         return contributionGroup["candidate_ids"]
     else:
         return [contributionGroup["committee_id"]]

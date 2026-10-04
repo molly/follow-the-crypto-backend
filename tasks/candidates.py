@@ -7,6 +7,7 @@ from outside_spending import update_candidate_outside_spending
 @task(
     name="trim_candidates",
     depends_on=["prune_race_details"],
+    inputs=["raceDetails"],
 )
 def trim_candidates(context):
     """Remove candidates without significant spending from race lists."""
@@ -17,6 +18,7 @@ def trim_candidates(context):
 @task(
     name="fetch_candidate_images",
     depends_on=["trim_candidates"],
+    inputs=["raceDetails"],
 )
 def fetch_candidate_images(context):
     """Get list of candidates without images."""

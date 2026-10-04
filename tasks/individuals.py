@@ -6,7 +6,7 @@ from process_individual_contributions import process_individual_contributions as
 @task(
     name="fetch_individual_spending",
     depends_on=["hydrate_committees"],
-    outputs=["rawIndividualSpending"],
+    outputs=["rawIndividualSpending", "rawIndividualContributions"],
 )
 def fetch_individual_spending(context):
     """Fetch individual spending data."""
@@ -17,8 +17,10 @@ def fetch_individual_spending(context):
 @task(
     name="process_individual_contributions",
     depends_on=["fetch_individual_spending"],
-    inputs=["rawIndividualSpending"],
-    outputs=["companies"],
+    inputs=["rawIndividualSpending", "rawIndividualContributions", "allRecipients"],
+    # Also the final writer of `individuals`, which it reads back and updates in
+    # place — so that's an output, not an input.
+    outputs=["companies", "individuals"],
 )
 def process_individual_contributions(context):
     """Process individual contributions."""

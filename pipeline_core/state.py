@@ -90,9 +90,19 @@ class StateTracker:
         """
         Check if a Firestore collection has been modified since a given timestamp.
 
-        This is a simple heuristic - we check if any document's update time
-        is newer than the given timestamp. This requires documents to have
-        an update timestamp field.
+        Two mechanisms, because most collections don't carry a timestamp field:
+
+        1. An indexed query on an `updated_at` field. Cheap, but only `companies`
+           and `individuals` actually write that field.
+        2. Otherwise, compare Firestore's own per-document `update_time`. Every
+           document has it whether or not the writer set anything, so this also
+           catches edits made outside the pipeline -- adding a race by hand, for
+           instance, which is the case that matters most and which mechanism 1
+           silently missed entirely.
+
+        The scan reads document metadata only (`select([])`, no field values),
+        and the collections involved are small (the largest is ~155 documents),
+        so this stays cheap enough to run per task per input.
 
         Args:
             collection_name: Name of the Firestore collection
@@ -101,19 +111,25 @@ class StateTracker:
         Returns:
             True if collection was modified, False otherwise
         """
+        collection = self.db.client.collection(collection_name)
         try:
-            # Query for any documents updated after the timestamp
-            # Note: This assumes documents have an 'updated_at' field
-            # If not present, we assume the collection was modified
-            query = (
-                self.db.client.collection(collection_name)
-                .where("updated_at", ">", timestamp)
-                .limit(1)
-            )
-            docs = list(query.stream())
-            return len(docs) > 0
+            query = collection.where("updated_at", ">", timestamp).limit(1)
+            if len(list(query.stream())) > 0:
+                return True
         except Exception as e:
-            # If we can't determine, assume it was modified
+            logging.debug(
+                f"No usable 'updated_at' index on '{collection_name}' "
+                f"({e}); falling back to document update times"
+            )
+
+        try:
+            for doc in collection.select([]).stream():
+                if doc.update_time is not None and doc.update_time > timestamp:
+                    return True
+            return False
+        except Exception as e:
+            # If we can't determine, assume it was modified: re-running a task
+            # unnecessarily is safer than serving data built on a stale input.
             logging.warning(
                 f"Could not check modification time for collection '{collection_name}': {e}"
             )

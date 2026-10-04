@@ -1,6 +1,8 @@
 from google.cloud import bigquery
 import datetime
 
+from ad_videos import rehost_new_ad_creatives
+
 
 def quote_str(string):
     return "'{}'".format(string)
@@ -24,14 +26,24 @@ FIELDS = [
 ]
 
 
-def get_ads(db):
+def get_ads(db, video_limit=None):
     new_ads = {}
     ads_by_committee = {}
     gatc_to_fec = {}
+    old_ads = {
+        doc.id: doc.to_dict() for doc in db.client.collection("ads").stream()
+    }
     for c_id, committee in db.committees.items():
-        if "GATC_id" in committee and committee["GATC_id"]:
-            gatc_to_fec[committee["GATC_id"]] = c_id
-            ads_by_committee[c_id] = {"GATC_id": committee["GATC_id"], "ads": {}}
+        # A committee can run ads under more than one advertiser account, so
+        # GATC_id accepts either a single id or a list of them.
+        gatc_ids = committee.get("GATC_id") or []
+        if isinstance(gatc_ids, str):
+            gatc_ids = [gatc_ids]
+        if not gatc_ids:
+            continue
+        for gatc_id in gatc_ids:
+            gatc_to_fec[gatc_id] = c_id
+        ads_by_committee[c_id] = {"GATC_ids": gatc_ids, "ads": {}}
 
     client = bigquery.Client()
     QUERY = (
@@ -57,6 +69,13 @@ def get_ads(db):
             ad_details[field] = value
         if ad_id in db.ads["google"]:
             ad_details.update(db.ads["google"][ad_id])
+        # Carry forward the rehosted video (and any failed-attempt count) from
+        # the last run. The BigQuery row doesn't know about it, so without this
+        # every run would re-download every ad.
+        previous = old_ads.get(gatc_to_fec[gatc_id], {}).get("ads", {}).get(ad_id, {})
+        for key in ("video", "video_attempts", "image", "image_attempts"):
+            if key in previous:
+                ad_details[key] = previous[key]
         ad_details["fec_id"] = gatc_to_fec[gatc_id]
         ads_by_committee[gatc_to_fec[gatc_id]]["ads"][ad_id] = ad_details
         ads_by_committee[gatc_to_fec[gatc_id]]["ads"][ad_id]["type"] = "google"
@@ -69,7 +88,10 @@ def get_ads(db):
         else:
             ads_by_committee[ad["committee_id"]] = {"ads": {ad["ad_id"]: ad}}
 
-    old_ads = db.client.collection("ads").document("by_committee").get().to_dict()
+    # Archive our own copy of the creative before writing, so the stored ad
+    # record points at media we control rather than a link that can rot.
+    rehost_new_ad_creatives(ads_by_committee, limit=video_limit)
+
     if old_ads:
         for committee in ads_by_committee:
             if committee not in old_ads:
@@ -84,5 +106,8 @@ def get_ads(db):
                             ad_id
                         ]
 
-    db.client.collection("ads").document("by_committee").set(ads_by_committee)
+    # One document per committee rather than a single "by_committee" doc:
+    # the combined ad set is well past Firestore's 1MB document limit.
+    for c_id, ad_group in ads_by_committee.items():
+        db.client.collection("ads").document(c_id).set(ad_group)
     return new_ads

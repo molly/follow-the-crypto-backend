@@ -9,5 +9,5 @@ from ads import get_ads
 )
 def fetch_ads(context):
     """Fetch committee advertising data."""
-    diff = get_ads(context.db)
+    diff = get_ads(context.db, video_limit=getattr(context, "ad_video_limit", None))
     return {"ads_diff": diff}

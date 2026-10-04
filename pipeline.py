@@ -108,6 +108,14 @@ Examples:
     )
 
     parser.add_argument(
+        "--ad-video-limit",
+        type=int,
+        default=None,
+        help="Cap how many ad videos fetch_ads rehosts in one run. The Ad Transparency "
+        "Center throttles hard, so a large backfill is slow; use this to spread it out.",
+    )
+
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -228,6 +236,7 @@ def main():
     )
     orchestrator.context.full_contributions = args.full_contributions
     orchestrator.context.full_fetch = args.full_fetch
+    orchestrator.context.ad_video_limit = args.ad_video_limit
 
     try:
         results = orchestrator.run(

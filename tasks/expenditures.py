@@ -19,7 +19,11 @@ def fetch_committee_expenditures(context):
 @task(
     name="process_expenditures",
     depends_on=["fetch_committee_expenditures"],
-    inputs=["rawExpenditures"],
+    # raceDetails: build_roster_maps reads the rosters to attribute each
+    # expenditure to a seat, to resolve the candidate's display name, and to
+    # date-match its sub-race, so adding a missing race (or fixing a roster
+    # name) has to re-run this or the spending stays orphaned.
+    inputs=["rawExpenditures", "raceDetails"],
     outputs=["expenditures", "oppositionSpending"],
 )
 def process_expenditures(context):
@@ -31,7 +35,7 @@ def process_expenditures(context):
 @task(
     name="compute_company_state_spending",
     depends_on=["process_expenditures", "process_company_contributions"],
-    inputs=["expenditures", "companies"],
+    inputs=["expenditures", "companies", "raceDetails", "allRecipients"],
     outputs=["expenditures"],
 )
 def compute_company_state_spending_task(context):
@@ -43,7 +47,7 @@ def compute_company_state_spending_task(context):
 @task(
     name="update_candidate_expenditures",
     depends_on=["prune_race_details"],
-    inputs=["expenditures", "raceSummaries"],
+    inputs=["expenditures", "raceSummaries", "raceDetails"],
 )
 def update_candidate_expenditures(context):
     """Group expenditures by candidate."""

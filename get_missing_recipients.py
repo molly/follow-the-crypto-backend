@@ -10,6 +10,22 @@ def race_has_candidate(race, candidate_id):
     )
 
 
+def filter_candidate_ids(ids):
+    """Keep only real FEC candidate IDs (P/H/S prefix).
+
+    The FEC committee endpoint sometimes returns committee IDs in candidate_ids —
+    joint fundraising committees are the common case (e.g. PAXTON VICTORY lists
+    C00901918). Those IDs can never be resolved to candidate_details, and a
+    recipient carrying one still looks like a candidate committee downstream, so
+    drop them here rather than letting them reach the frontend. Real candidate IDs
+    that are missing can be added by hand via committee affiliations.
+    """
+    if ids is None:
+        return None
+    filtered = [i for i in ids if i and i[0] in {"P", "H", "S"}]
+    return filtered or None
+
+
 def get_missing_recipient_data(recipients, db, session):
     committee_data = {}
 
@@ -65,20 +81,26 @@ def get_missing_recipient_data(recipients, db, session):
                     "Malformed committee affiliation", {"recipient_id": recipient_id}
                 )
                 print(f"Malformed committee affiliation: {recipient_id}")
+        # Runs for every recipient, not just freshly fetched ones, so stored
+        # recipients that already picked up a bogus ID get cleaned up too.
+        for field in ("candidate_ids", "sponsor_candidate_ids"):
+            if field in recipients[recipient_id]:
+                recipients[recipient_id][field] = filter_candidate_ids(
+                    recipients[recipient_id][field]
+                )
         if recipients[recipient_id].get("candidate_ids") is not None:
             for candidate_id in recipients[recipient_id]["candidate_ids"]:
                 if (
                     candidate_id
                     not in recipients.get(recipient_id, {}).get("candidate_details", {})
-                    and candidate_id[0] in {"P", "H", "S"}
-                ) and candidate_id not in candidate_data:
+                    and candidate_id not in candidate_data
+                ):
                     candidate_data[candidate_id] = {}
         if recipients[recipient_id].get("sponsor_candidate_ids") is not None:
             for candidate_id in recipients[recipient_id]["sponsor_candidate_ids"]:
                 if (
                     candidate_id not in recipients[recipient_id]["candidate_details"]
                     and candidate_id not in candidate_data
-                    and candidate_id[0] in {"P", "H", "S"}
                 ):
                     candidate_data[candidate_id] = {}
 
@@ -184,7 +206,9 @@ def get_missing_recipient_data(recipients, db, session):
                     )
 
     for recipient_id in recipients.keys():
-        related_candidates = recipients[recipient_id].get("candidate_ids", []) or []
+        # Copy, or the extend below writes the sponsor IDs into the recipient's
+        # stored candidate_ids.
+        related_candidates = list(recipients[recipient_id].get("candidate_ids") or [])
         if recipients[recipient_id].get("sponsor_candidate_ids") is not None:
             related_candidates.extend(recipients[recipient_id]["sponsor_candidate_ids"])
         if "candidate_details" not in recipients[recipient_id]:

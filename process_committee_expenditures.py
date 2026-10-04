@@ -1,5 +1,5 @@
 from states import SPECIAL_ELECTIONS, CURRENT_CYCLE
-from utils import get_sector_keys
+from utils import get_expenditure_race_type, get_sector_keys
 from race_utils import get_all_races
 
 
@@ -17,30 +17,81 @@ def sort_and_slice(lst, length=10):
     )[:length]
 
 
-def build_candidate_seat_map(db):
-    """candidate_id -> base race id (e.g. 'NY-H-15'), built from the raceDetails
-    rosters. The FEC candidate_id is authoritative for which seat a candidate is
-    running for, whereas the filer-entered candidate_office_district is free text
-    and is sometimes mis-keyed. Only candidate_ids rostered in a single seat are
+def build_roster_maps(db):
+    """Three lookups over the raceDetails rosters, built in a single pass.
+
+    `cid_to_seat` is candidate_id -> base race id (e.g. 'NY-H-15'). The FEC
+    candidate_id is authoritative for which seat a candidate is running for,
+    whereas the filer-entered candidate_office_district is free text and is
+    sometimes mis-keyed. Only candidate_ids rostered in a single seat are
     included; an id that appears in more than one seat is ambiguous and left to
-    the district field. Special-election variants ('NY-H-15-special') collapse to
-    the same base seat, so they don't count as a second seat."""
+    the district field. Special-election variants ('NY-H-15-special') collapse
+    to the same base seat, so they don't count as a second seat.
+
+    `cid_to_name` is candidate_id -> roster common_name. The filer-entered name
+    fields are unreliable in the same way the district field is: FEC files
+    Ashley Hinson under her spouse's surname ("ARENHOLZ") with "ASHLEY HINSON"
+    packed into candidate_first_name, so a name assembled from those fields
+    reads "Ashley Arenholz" and matches no roster entry. An id whose rostered
+    names disagree is left out rather than asserting one of them.
+
+    `race_by_id` is full race id ('IA-S') -> race data, for resolving the
+    sub-race an expenditure belongs to from its date.
+    """
     cid_to_seats = {}
+    cid_to_names = {}
+    race_by_id = {}
     for state, races in get_all_races(db.client).items():
         for race_id, race_data in races.items():
+            race_by_id[f"{state}-{race_id}"] = race_data
             base = (
                 race_id[: -len("-special")]
                 if race_id.endswith("-special")
                 else race_id
             )
             seat = f"{state}-{base}"
-            for candidate in (race_data.get("candidates") or {}).values():
+            for name, candidate in (race_data.get("candidates") or {}).items():
                 cid = candidate.get("candidate_id")
                 if not cid:
                     continue
                 cid = db.candidate_aliases.get(cid, cid)
                 cid_to_seats.setdefault(cid, set()).add(seat)
-    return {cid: seats.pop() for cid, seats in cid_to_seats.items() if len(seats) == 1}
+                cid_to_names.setdefault(cid, set()).add(
+                    candidate.get("common_name") or name
+                )
+    return (
+        {cid: seats.pop() for cid, seats in cid_to_seats.items() if len(seats) == 1},
+        {cid: names.pop() for cid, names in cid_to_names.items() if len(names) == 1},
+        race_by_id,
+    )
+
+
+def resolve_from_roster(expenditure, cid_to_seat, cid_to_name, race_by_id):
+    """Stamp the roster-resolved candidate name and sub-race onto an expenditure.
+
+    Both are things every consumer needs and none can derive reliably from the
+    filer-entered fields, so they're settled once here rather than reassembled
+    at each render site:
+
+      - `candidate_common_name`: the name the rest of the site calls this
+        candidate (see build_roster_maps).
+      - `subrace`: efiled expenditures carry no election_type at all, so
+        get_expenditure_race_type can only resolve them by comparing the
+        expenditure's date against the race's sub-race dates -- which needs the
+        roster passed in. Without this the row keeps a null subrace and matches
+        no sub-race view, orphaning the spending.
+    """
+    name = cid_to_name.get(expenditure.get("candidate_id"))
+    if name:
+        expenditure["candidate_common_name"] = name
+
+    race = race_by_id.get(get_race_name(expenditure, cid_to_seat))
+    if race:
+        # Returns an existing usable subrace untouched, and only falls through to
+        # date matching for the null and "other" cases.
+        subrace = get_expenditure_race_type(expenditure, race.get("races") or [])
+        if subrace:
+            expenditure["subrace"] = subrace
 
 
 def get_race_name(expenditure, cid_to_seat=None):
@@ -78,7 +129,16 @@ def process_expenditures(db):
     all_expenditures = (
         db.client.collection("expenditures").document("all").get().to_dict()
     )
-    cid_to_seat = build_candidate_seat_map(db)
+    cid_to_seat, cid_to_name, race_by_id = build_roster_maps(db)
+
+    # Resolve names and sub-races across every row before anything reads them.
+    # Deliberately not folded into the aggregation loop below, which skips
+    # zero-amount rows -- those still get rendered in the recent-expenditure
+    # lists, so they need resolving too.
+    for expenditure in all_expenditures.values():
+        resolve_from_roster(expenditure, cid_to_seat, cid_to_name, race_by_id)
+    db.client.collection("expenditures").document("all").set(all_expenditures)
+
     states = {}
     new_opposition_spending = set()
 

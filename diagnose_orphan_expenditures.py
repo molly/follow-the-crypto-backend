@@ -40,6 +40,12 @@ def get_state_and_key(full_race_id):
 
 def get_candidate_display(e):
     """Mirror getCandidateName() in CommitteeExpendituresByCandidate.tsx."""
+    # Resolved off the roster by process_expenditures, which is what the site
+    # displays. Only rows it couldn't resolve fall back to the filer-entered
+    # fields, which can name a different surname entirely.
+    resolved = e.get("candidate_common_name")
+    if resolved:
+        return resolved
     last = e.get("candidate_last_name")
     if last:
         first = (e.get("candidate_first_name") or "").split(" ")[0]
@@ -92,6 +98,30 @@ def is_visible_on_race_page(e, race_obj):
     return False
 
 
+def match_roster_name(e, roster):
+    """The roster key for an expenditure's candidate, or None.
+
+    Matches on candidate_id first: it's authoritative, whereas the filer-entered
+    name fields can carry a different surname entirely (FEC files Ashley Hinson
+    under her spouse's name), which no roster key resembles. Falls back to the
+    last-name comparison for rows with no id, or an id nobody rosters.
+    """
+    e_cid = e.get("candidate_id")
+    if e_cid:
+        by_id = next(
+            (
+                n
+                for n, c in roster.items()
+                if c.get("candidate_id") and e_cid in c["candidate_id"]
+            ),
+            None,
+        )
+        if by_id:
+            return by_id
+    last = (e.get("candidate_last_name") or "").strip()
+    return next((n for n in roster if last and compare_names(last, n)), None)
+
+
 def classify(e, race_obj):
     """Why an expenditure that's invisible on the race page got dropped."""
     if race_obj is None:
@@ -106,8 +136,7 @@ def classify(e, race_obj):
         return "SUBRACE_MISMATCH"  # subrace tag not among this race's sub-races
 
     roster = race_obj.get("candidates", {})
-    last = (e.get("candidate_last_name") or "").strip()
-    matched_name = next((n for n in roster if last and compare_names(last, n)), None)
+    matched_name = match_roster_name(e, roster)
 
     if matched_name is None:
         return "CANDIDATE_NOT_IN_ROSTER"  # named candidate isn't in the race roster
@@ -124,15 +153,13 @@ def classify(e, race_obj):
 
 
 def get_roster_candidate_id(e, race_obj):
-    """The candidate_id the race roster holds for the expenditure's named
-    candidate, matched by last name (mirrors classify()). None if the candidate
-    isn't rostered. For ID_MISMATCH this is the id that fails to match the
-    expenditure's own candidate_id."""
+    """The candidate_id the race roster holds for the expenditure's candidate
+    (mirrors classify()). None if the candidate isn't rostered. For ID_MISMATCH
+    this is the id that fails to match the expenditure's own candidate_id."""
     if race_obj is None:
         return None
     roster = race_obj.get("candidates", {})
-    last = (e.get("candidate_last_name") or "").strip()
-    matched_name = next((n for n in roster if last and compare_names(last, n)), None)
+    matched_name = match_roster_name(e, roster)
     if matched_name is None:
         return None
     return roster[matched_name].get("candidate_id")
