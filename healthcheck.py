@@ -275,7 +275,7 @@ def candidates_awaiting_results(all_races, today=None):
 # constants in sync with the card copy.
 _DEFEND_AMERICAN_JOBS = "C00836221"  # crypto, "Defend American Jobs"
 _AMERICAN_MISSION = "C00916692"  # AI, "American Mission"
-_EXPECTED_INTRA_SECTOR_CONFLICTS = {"NY-H-12", "MA-H-06"}
+_EXPECTED_INTRA_SECTOR_CONFLICTS = {"NY-H-12", "MA-H-06", "AZ-H-01", "MT-H-01"}
 _EXPECTED_TOP_OPPOSE_TARGETS = {"Juliana Stratton", "Alex Bores"}
 # Republicans should remain a negligible share of opposition spending.
 _OPPOSE_REP_SHARE_LIMIT = 0.10
@@ -359,10 +359,10 @@ def notable_patterns_premises(db):
         + (f"; DIVERGENT in {', '.join(divergent)}" if divergent else "; all aligned"),
     })
 
-    # Card 2: NY-H-12 and MA-H-06 are the only intra-sector conflicts.
+    # Card 2: NY-H-12, MA-H-06, AZ-H-01, and MT-H-01 are the only intra-sector conflicts.
     conflicts = _intra_sector_conflicts(races)
     checks.append({
-        "premise": "NY-H-12 and MA-H-06 are the only intra-sector conflicts",
+        "premise": "NY-H-12, MA-H-06, AZ-H-01, and MT-H-01 are the only intra-sector conflicts",
         "ok": conflicts == _EXPECTED_INTRA_SECTOR_CONFLICTS,
         "detail": f"intra-sector conflicts: {', '.join(sorted(conflicts)) or 'none'}",
     })

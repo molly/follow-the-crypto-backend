@@ -49,7 +49,9 @@ to_skip = {
     "Lewis Mizrahi",
     "Jared Kane",
     "Nathan Tracy",
-    "Wilfred Curioso"
+    "Wilfred Curioso",
+    "Angie Boone",
+    "Chris Chung"
 }
 
 
