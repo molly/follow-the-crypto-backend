@@ -1,6 +1,7 @@
 from states import SPECIAL_ELECTIONS, CURRENT_CYCLE
 from utils import get_expenditure_race_type, get_sector_keys
 from race_utils import get_all_races
+from expenditure_utils import get_all_expenditures, set_all_expenditures
 
 
 def sort_and_slice(lst, length=10):
@@ -126,9 +127,7 @@ def get_race_name(expenditure, cid_to_seat=None):
 
 
 def process_expenditures(db):
-    all_expenditures = (
-        db.client.collection("expenditures").document("all").get().to_dict()
-    )
+    all_expenditures = get_all_expenditures(db)
     cid_to_seat, cid_to_name, race_by_id = build_roster_maps(db)
 
     # Resolve names and sub-races across every row before anything reads them.
@@ -137,7 +136,7 @@ def process_expenditures(db):
     # lists, so they need resolving too.
     for expenditure in all_expenditures.values():
         resolve_from_roster(expenditure, cid_to_seat, cid_to_name, race_by_id)
-    db.client.collection("expenditures").document("all").set(all_expenditures)
+    set_all_expenditures(db, all_expenditures)
 
     states = {}
     new_opposition_spending = set()

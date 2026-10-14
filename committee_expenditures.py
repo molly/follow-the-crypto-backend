@@ -1,4 +1,5 @@
 from utils import FEC_fetch, pick, get_expenditure_race_type
+from expenditure_utils import set_all_expenditures
 
 EXPENDITURE_FIELDS = [
     "expenditure_amount",
@@ -181,7 +182,7 @@ def update_committee_expenditures(db, session):
     # Diff with previously stored expenditures
     # new_transactions = {}
     # old_transactions = (
-    #     db.client.collection("expenditures").document("all").get().to_dict()
+    #     get_all_expenditures(db)
     # )
     # if old_transactions:
     #     old_transaction_ids = set(old_transactions.keys())
@@ -189,5 +190,5 @@ def update_committee_expenditures(db, session):
     #     if diff_ids:
     #         new_transactions = {x: transactions[x] for x in diff_ids}
 
-    db.client.collection("expenditures").document("all").set(transactions)
+    set_all_expenditures(db, transactions)
     # return new_transactions

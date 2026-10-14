@@ -1,6 +1,7 @@
 import csv
 from datetime import date, timedelta
 from race_utils import get_races_for_state, is_defeated
+from expenditure_utils import get_all_expenditures
 
 
 def primaries(db):
@@ -8,7 +9,7 @@ def primaries(db):
         db.client.collection("candidates").document("bySpending").get().to_dict()
     )
     state_data = db.client.collection("expenditures").document("states").get().to_dict()
-    expenditures = db.client.collection("expenditures").document("all").get().to_dict()
+    expenditures = get_all_expenditures(db)
     primary_data = []
     for candidate in candidates["order"]:
         candidate_data = candidates["candidates"][candidate]

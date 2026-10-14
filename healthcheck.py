@@ -32,6 +32,7 @@ import os
 from states import SPECIAL_ELECTIONS, CURRENT_CYCLE
 from race_utils import get_all_races, validate_special_elections
 from recipient_utils import get_all_recipients, compute_significant_direct_support
+from expenditure_utils import get_all_expenditures
 from diagnose_orphan_expenditures import find_orphan_expenditures
 from candidate_images import get_candidates_without_images
 
@@ -276,7 +277,7 @@ def candidates_awaiting_results(all_races, today=None):
 _DEFEND_AMERICAN_JOBS = "C00836221"  # crypto, "Defend American Jobs"
 _AMERICAN_MISSION = "C00916692"  # AI, "American Mission"
 _EXPECTED_INTRA_SECTOR_CONFLICTS = {"NY-H-12", "MA-H-06", "AZ-H-01", "MT-H-01"}
-_EXPECTED_TOP_OPPOSE_TARGETS = {"Juliana Stratton", "Alex Bores"}
+_EXPECTED_TOP_OPPOSE_TARGETS = {"Juliana Stratton", "Sherrod Brown"}
 # Republicans should remain a negligible share of opposition spending.
 _OPPOSE_REP_SHARE_LIMIT = 0.10
 
@@ -396,7 +397,7 @@ def notable_patterns_premises(db):
         f"(R share {rep_share:.0%})",
     })
 
-    # Card 4: the two largest opposition targets are Stratton and Bores.
+    # Card 4: the two largest opposition targets are Stratton and Brown.
     opp_by_cand = Counter()
     for r in races:
         for pos in r.get("candidate_positions", []):
@@ -405,7 +406,7 @@ def notable_patterns_premises(db):
                 opp_by_cand[pos["candidate"]] += amt
     top2 = {name for name, _ in opp_by_cand.most_common(2)}
     checks.append({
-        "premise": "Largest opposition targets are Juliana Stratton and Alex Bores",
+        "premise": "Largest opposition targets are Juliana Stratton and Sherrod Brown",
         "ok": top2 == _EXPECTED_TOP_OPPOSE_TARGETS,
         "detail": "top opposition targets: "
         + (", ".join(f"{n} ({_money(a)})" for n, a in opp_by_cand.most_common(2)) or "none"),
@@ -425,9 +426,7 @@ def run_healthcheck(db, check_images=True):
     states_data = (
         db.client.collection("expenditures").document("states").get().to_dict() or {}
     )
-    all_exp = (
-        db.client.collection("expenditures").document("all").get().to_dict() or {}
-    )
+    all_exp = get_all_expenditures(db)
 
     report = {}
     significant_company_races = compute_significant_direct_support(db)["race_ids"]

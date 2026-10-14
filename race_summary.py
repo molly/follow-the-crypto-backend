@@ -11,6 +11,7 @@ from states import SINGLE_MEMBER_STATES
 from unidecode import unidecode
 from race_utils import get_all_races, update_race
 from recipient_utils import has_significant_direct_support
+from expenditure_utils import get_all_expenditures, update_expenditure_field
 
 def trim_name(name):
     m = re.match(r"^(.+)(\s(?:[SJ]r\.?|IX|IV|V?I{0,3}))$", name)
@@ -59,9 +60,7 @@ def find_candidate_in_other_district(session, session_params, common_name):
 
 def summarize_races(db, session):
     all_race_data = get_all_races(db.client)
-    all_expenditures = (
-        db.client.collection("expenditures").document("all").get().to_dict()
-    )
+    all_expenditures = get_all_expenditures(db)
     states_expenditures = (
         db.client.collection("expenditures").document("states").get().to_dict()
     )
@@ -502,17 +501,15 @@ def summarize_races(db, session):
                     if not subrace:
                         subrace = stored_subrace
                     elif subrace != stored_subrace:
-                        db.client.collection("expenditures").document("all").update(
-                            {db.client.field_path(expenditure_id, "subrace"): subrace}
-                        )
+                        update_expenditure_field(db, expenditure_id, "subrace", subrace)
                 else:
                     # Efiled expenditure: no election_type, trust the stored subrace.
                     subrace = stored_subrace
                     if subrace is None:
                         subrace = get_expenditure_race_type(expenditure, sorted_races)
                         if subrace:
-                            db.client.collection("expenditures").document("all").update(
-                                {db.client.field_path(expenditure_id, "subrace"): subrace}
+                            update_expenditure_field(
+                                db, expenditure_id, "subrace", subrace
                             )
                 if subrace:
                     candidates_data[candidate_key]["expenditure_races"].add(subrace)

@@ -51,7 +51,8 @@ to_skip = {
     "Nathan Tracy",
     "Wilfred Curioso",
     "Angie Boone",
-    "Chris Chung"
+    "Chris Chung",
+    "Angie Boone",
 }
 
 

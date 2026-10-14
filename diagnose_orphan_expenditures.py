@@ -30,6 +30,7 @@ from collections import defaultdict
 
 from Database import Database
 from utils import compare_names
+from expenditure_utils import get_all_expenditures
 
 
 def get_state_and_key(full_race_id):
@@ -184,9 +185,7 @@ def find_orphan_expenditures(db, all_exp=None, states_exp=None, races_by_state=N
     avoid re-reading Firestore (e.g. from the healthcheck). Read-only.
     """
     if all_exp is None:
-        all_exp = (
-            db.client.collection("expenditures").document("all").get().to_dict() or {}
-        )
+        all_exp = get_all_expenditures(db)
     if states_exp is None:
         states_exp = (
             db.client.collection("expenditures").document("states").get().to_dict()
