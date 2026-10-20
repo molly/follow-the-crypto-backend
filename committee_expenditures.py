@@ -78,14 +78,11 @@ def update_committee_expenditures(db, session):
                 # the race roster on the frontend instead of being hidden.
                 if exp.get("candidate_id") in db.candidate_aliases:
                     exp["candidate_id"] = db.candidate_aliases[exp["candidate_id"]]
-                if exp["amendment_indicator"] == "A":
-                    if uid in transactions and (
-                        transactions[uid]["amendment_indicator"] == "N"
-                        or transactions[uid]["amendment_number"]
-                        < exp["amendment_number"]
-                    ):
-                        transactions[uid] = pick(exp, EXPENDITURE_FIELDS)
-                elif uid not in transactions:
+                # most_recent=True returns only the latest version of each
+                # transaction, so an amendment's original isn't in this set: the
+                # amendment is the authoritative record and must be kept, not just
+                # used to replace an original that was never fetched.
+                if exp["amendment_indicator"] == "A" or uid not in transactions:
                     transactions[uid] = pick(exp, EXPENDITURE_FIELDS)
 
             if exp_count >= data["pagination"]["count"]:
