@@ -1,5 +1,6 @@
 from utils import FEC_fetch, pick, get_expenditure_race_type
 from expenditure_utils import set_all_expenditures
+from electioneering import fetch_electioneering_communications
 
 EXPENDITURE_FIELDS = [
     "expenditure_amount",
@@ -37,11 +38,13 @@ def update_committee_expenditures(db, session):
     """
     committee_ids = [committee["id"] for committee in db.committees.values()]
     transactions = {}
-    last_index = None
-    last_expenditure_date = None
-    exp_count = 0
     for committee_id in committee_ids:
-        # First fetch processed expenditures
+        # First fetch processed expenditures. The pagination cursor and count are
+        # per-committee: carrying them over starts the next committee mid-stream and
+        # ends its fetch after one page once the running count passes its total.
+        last_index = None
+        last_expenditure_date = None
+        exp_count = 0
         while True:
             data = FEC_fetch(
                 session,
@@ -178,6 +181,14 @@ def update_committee_expenditures(db, session):
             siblings = ids_by_seat_name.get(_seat_name_key(t))
             if siblings and len(siblings) == 1:
                 t["candidate_id"] = next(iter(siblings))
+
+    electioneering, electioneering_skipped = fetch_electioneering_communications(
+        db, session, committee_ids
+    )
+    transactions.update(electioneering)
+    db.client.collection("expenditures").document("electioneering_skipped").set(
+        {"rows": electioneering_skipped}
+    )
 
     # Diff with previously stored expenditures
     # new_transactions = {}

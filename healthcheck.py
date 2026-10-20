@@ -16,6 +16,7 @@ Sections:
                              (also covers expenditures whose candidate isn't in
                              the race roster).
   - incomplete_committees    Committees missing a description/affiliation.
+  - skipped_electioneering   Tracked ECs left out for lack of a support/oppose rule.
   - races_needing_review     raceDetails with unreviewed scraped/manual races.
   - unreviewed_contributions Committee + company contributions awaiting review.
   - candidates_without_images Candidates with no image in the storage bucket.
@@ -164,6 +165,20 @@ def incomplete_committees(db):
             continue
         incomplete.append((cid, rec.get("committee_name") or cid))
     return sorted(incomplete, key=lambda x: x[1].lower())
+
+
+def skipped_electioneering(db):
+    """Tracked committees' electioneering communications left out of the
+    expenditures because EC_SUPPORT_OPPOSE_BY_PARTY has no rule for them.
+    Recorded by fetch_committee_expenditures."""
+    doc = (
+        db.client.collection("expenditures")
+        .document("electioneering_skipped")
+        .get()
+        .to_dict()
+        or {}
+    )
+    return doc.get("rows", [])
 
 
 def races_needing_review(all_races):
@@ -445,6 +460,7 @@ def run_healthcheck(db, check_images=True):
         db, all_exp=all_exp, states_exp=states_data, races_by_state=all_races
     )
     report["incomplete_committees"] = incomplete_committees(db)
+    report["skipped_electioneering"] = skipped_electioneering(db)
     report["races_needing_review"] = races_needing_review(all_races)
     report["unreviewed_contributions"] = unreviewed_contributions(db)
     report["candidates_awaiting_results"] = candidates_awaiting_results(all_races)
@@ -536,6 +552,17 @@ def _log_report(report):
         lines.append(f"  - {cid}  {name}")
     if len(committees) > 25:
         lines.append(f"  ... and {len(committees) - 25} more")
+
+    skipped_ec = report["skipped_electioneering"]
+    lines.append(
+        f"\nElectioneering communications with no support/oppose rule: "
+        f"{len(skipped_ec)} rows, {_money(sum(r['amount'] for r in skipped_ec))}"
+    )
+    for r in skipped_ec:
+        lines.append(
+            f"  - {r['committee_id']}  {r['candidate_name']} ({r['party']})  "
+            f"{_money(r['amount'])}"
+        )
 
     needs_review = report["races_needing_review"]
     lines.append(f"\nRaces needing review: {len(needs_review)}")

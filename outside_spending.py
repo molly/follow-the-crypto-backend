@@ -1,6 +1,7 @@
 import logging
 from utils import FEC_fetch, get_sector_keys, pick, get_expenditure_race_type
 from race_utils import get_all_races, save_races_for_state
+from expenditure_utils import get_all_expenditures
 
 SCHEDULE_E_FIELDS = [
     "expenditure_amount",
@@ -22,8 +23,69 @@ def split_into_chunks(array):
     return [array[i : i + 10] for i in range(0, len(array), 10)]
 
 
+def add_electioneering_spending(
+    db,
+    outside_spending,
+    race_data,
+    electioneering_by_candidate,
+    is_special_race,
+    has_both_races,
+):
+    """Add tracked committees' electioneering communications to a race's
+    outside spending.
+
+    The Schedule E queries above can't see them: ECs are filed on Form 9, and
+    only the tracked committees' ECs carry a support/oppose indicator (assigned
+    in electioneering.py), so those are the only ones that can be counted.
+    """
+    for candidate_name, candidate in race_data["candidates"].items():
+        candidate_id = candidate.get("candidate_id")
+        if not candidate_id:
+            continue
+        canonical_id = db.candidate_aliases.get(candidate_id, candidate_id)
+        for ec in electioneering_by_candidate.get(canonical_id, []):
+            if has_both_races:
+                ec_is_special = (ec.get("election_type") or "").startswith("S")
+                if is_special_race != ec_is_special:
+                    continue
+            result = {
+                **ec,
+                "subrace": get_expenditure_race_type(ec, race_data["races"]),
+            }
+            if candidate_name not in outside_spending:
+                outside_spending[candidate_name] = {
+                    "support": [],
+                    "oppose": [],
+                    "support_total": 0,
+                    "oppose_total": 0,
+                    "crypto_support_total": 0,
+                    "ai_support_total": 0,
+                    "crypto_oppose_total": 0,
+                    "ai_oppose_total": 0,
+                }
+            spending = outside_spending[candidate_name]
+            position = "support" if result["support_oppose_indicator"] == "S" else "oppose"
+            amount = result["expenditure_amount"]
+            spending[position].append(pick(result, SCHEDULE_E_FIELDS + ["source"]))
+            spending[f"{position}_total"] += amount
+            sector_keys = get_sector_keys(
+                db.committees.get(result["committee_id"], {}).get("sector")
+            )
+            if "crypto" in sector_keys:
+                spending[f"crypto_{position}_total"] += amount
+            if "ai" in sector_keys:
+                spending[f"ai_{position}_total"] += amount
+
+
 def update_candidate_outside_spending(db, session):
     try:
+        electioneering_by_candidate = {}
+        for expenditure in get_all_expenditures(db).values():
+            if expenditure.get("source") == "electioneering":
+                electioneering_by_candidate.setdefault(
+                    expenditure["candidate_id"], []
+                ).append(expenditure)
+
         all_race_data = get_all_races(db.client)
         for state, state_data in all_race_data.items():
             if state == "US":
@@ -304,6 +366,15 @@ def update_candidate_outside_spending(db, session):
                             page += 1
                         else:
                             break
+
+                add_electioneering_spending(
+                    db,
+                    outside_spending,
+                    race_data,
+                    electioneering_by_candidate,
+                    is_special_race,
+                    has_both_races,
+                )
 
                 for candidate_name, candidate_spending in outside_spending.items():
                     state_data[race_id]["candidates"][candidate_name][
