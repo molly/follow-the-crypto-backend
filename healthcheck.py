@@ -18,6 +18,9 @@ Sections:
   - incomplete_committees    Committees missing a description/affiliation.
   - skipped_electioneering   Tracked ECs left out for lack of a support/oppose rule.
   - races_needing_review     raceDetails with unreviewed scraped/manual races.
+  - untracked_manual_races   Races created in the admin UI with no tracked
+                             activity (prune keeps them, so they need a human
+                             decision).
   - unreviewed_contributions Committee + company contributions awaiting review.
   - candidates_without_images Candidates with no image in the storage bucket.
   - candidates_awaiting_results Past-dated subraces with no called outcome.
@@ -31,7 +34,11 @@ import logging
 import os
 
 from states import SPECIAL_ELECTIONS, CURRENT_CYCLE
-from race_utils import get_all_races, validate_special_elections
+from race_utils import (
+    compute_tracked_race_ids,
+    get_all_races,
+    validate_special_elections,
+)
 from recipient_utils import get_all_recipients, compute_significant_direct_support
 from expenditure_utils import get_all_expenditures
 from diagnose_orphan_expenditures import find_orphan_expenditures
@@ -181,6 +188,23 @@ def skipped_electioneering(db):
     return doc.get("rows", [])
 
 
+def untracked_manual_races(db, all_races, states_data, significant_company_races):
+    """Races created in the admin UI that have no tracked activity.
+
+    prune_untracked_races never removes these, since a hand-created race's roster
+    can be what pulls a mis-districted expenditure onto it on the next run. One that
+    still has nothing after that is either waiting on spending or no longer
+    needed, which only a human can tell.
+    """
+    tracked = compute_tracked_race_ids(db, states_data, significant_company_races)
+    return sorted(
+        f"{state}-{race_id}"
+        for state, races in all_races.items()
+        for race_id, race in races.items()
+        if race.get("createdManually") and f"{state}-{race_id}" not in tracked
+    )
+
+
 def races_needing_review(all_races):
     """raceDetails with unreviewed scraped or manual races.
 
@@ -291,8 +315,11 @@ def candidates_awaiting_results(all_races, today=None):
 # constants in sync with the card copy.
 _DEFEND_AMERICAN_JOBS = "C00836221"  # crypto, "Defend American Jobs"
 _AMERICAN_MISSION = "C00916692"  # AI, "American Mission"
-_EXPECTED_INTRA_SECTOR_CONFLICTS = {"NY-H-12", "MA-H-06", "AZ-H-01", "MT-H-01"}
-_EXPECTED_TOP_OPPOSE_TARGETS = {"Juliana Stratton", "Sherrod Brown"}
+_EXPECTED_INTRA_SECTOR_CONFLICTS = {"NY-H-12", "MA-H-06", "AZ-H-01", "MT-H-01", "NC-H-01"}
+_EXPECTED_TOP_OPPOSE_TARGET = "Sherrod Brown"
+# The card names Osborn as the independent target, with his opposition listed
+# alongside the by-party totals (which only count DEM and REP).
+_EXPECTED_INDEPENDENT_OPPOSE_TARGETS = {"S4NE00207"}  # Dan Osborn
 # Republicans should remain a negligible share of opposition spending.
 _OPPOSE_REP_SHARE_LIMIT = 0.10
 
@@ -319,7 +346,7 @@ def _intra_sector_conflicts(races):
     return conflicts
 
 
-def notable_patterns_premises(db):
+def notable_patterns_premises(db, all_exp):
     """Check the editorial premises behind the NotablePatterns cards.
 
     Returns a list of {premise, ok, detail} dicts. ok=False means the data has
@@ -375,10 +402,10 @@ def notable_patterns_premises(db):
         + (f"; DIVERGENT in {', '.join(divergent)}" if divergent else "; all aligned"),
     })
 
-    # Card 2: NY-H-12, MA-H-06, AZ-H-01, and MT-H-01 are the only intra-sector conflicts.
+    # Card 2: NY-H-12, MA-H-06, AZ-H-01, MT-H-01, and NC-H-01 are the only intra-sector conflicts.
     conflicts = _intra_sector_conflicts(races)
     checks.append({
-        "premise": "NY-H-12, MA-H-06, AZ-H-01, and MT-H-01 are the only intra-sector conflicts",
+        "premise": "NY-H-12, MA-H-06, AZ-H-01, MT-H-01, and NC-H-01 are the only intra-sector conflicts",
         "ok": conflicts == _EXPECTED_INTRA_SECTOR_CONFLICTS,
         "detail": f"intra-sector conflicts: {', '.join(sorted(conflicts)) or 'none'}",
     })
@@ -399,32 +426,54 @@ def notable_patterns_premises(db):
         "detail": f"AI support: {_money(a_dem)} D vs {_money(a_rep)} R",
     })
 
-    # Card 4: nearly all opposition spending targets Democrats.
+    # Card 4: Osborn is the only independent opposition target. Rows with no
+    # candidate_party at all are unknown, not independent, so they're excluded.
+    ind_opp = Counter()
+    for e in all_exp.values():
+        if e.get("support_oppose_indicator") == "O" and e.get("candidate_party") not in (
+            "DEM", "REP", None,
+        ):
+            ind_opp[e.get("candidate_id")] += e.get("expenditure_amount") or 0
+    checks.append({
+        "premise": "Dan Osborn is the only independent opposition target",
+        "ok": set(ind_opp) == _EXPECTED_INDEPENDENT_OPPOSE_TARGETS,
+        "detail": "independent opposition targets: "
+        + (", ".join(f"{n} ({_money(a)})" for n, a in ind_opp.most_common()) or "none"),
+    })
+
+    # Card 4: most opposition spending targets Democrats, and Republicans are a
+    # negligible share.
     allp = by_party.get("all", {})
     dem_opp = allp.get("dem_oppose", 0) or 0
     rep_opp = allp.get("rep_oppose", 0) or 0
-    total_opp = dem_opp + rep_opp
+    other_opp = sum(ind_opp.values())
+    total_opp = dem_opp + rep_opp + other_opp
     rep_share = rep_opp / total_opp if total_opp else 0
     checks.append({
-        "premise": "Opposition spending overwhelmingly targets Democrats",
+        "premise": "Most opposition spending targets Democrats",
+        "ok": dem_opp > rep_opp + other_opp,
+        "detail": f"{_money(dem_opp)} vs Democrats, {_money(other_opp)} vs independents, "
+        f"{_money(rep_opp)} vs Republicans",
+    })
+    checks.append({
+        "premise": "Republicans are a negligible share of opposition spending",
         "ok": rep_share <= _OPPOSE_REP_SHARE_LIMIT,
-        "detail": f"{_money(dem_opp)} vs Democrats, {_money(rep_opp)} vs Republicans "
-        f"(R share {rep_share:.0%})",
+        "detail": f"R share {rep_share:.0%}",
     })
 
-    # Card 4: the two largest opposition targets are Stratton and Brown.
+    # Card 4: the largest opposition target is Sherrod Brown.
     opp_by_cand = Counter()
     for r in races:
         for pos in r.get("candidate_positions", []):
             amt = pos.get("oppose_total", 0) or 0
             if amt > 0:
                 opp_by_cand[pos["candidate"]] += amt
-    top2 = {name for name, _ in opp_by_cand.most_common(2)}
+    top = opp_by_cand.most_common(1)
     checks.append({
-        "premise": "Largest opposition targets are Juliana Stratton and Sherrod Brown",
-        "ok": top2 == _EXPECTED_TOP_OPPOSE_TARGETS,
-        "detail": "top opposition targets: "
-        + (", ".join(f"{n} ({_money(a)})" for n, a in opp_by_cand.most_common(2)) or "none"),
+        "premise": "Largest opposition target is Sherrod Brown",
+        "ok": bool(top) and top[0][0] == _EXPECTED_TOP_OPPOSE_TARGET,
+        "detail": "top opposition target: "
+        + (f"{top[0][0]} ({_money(top[0][1])})" if top else "none"),
     })
 
     return checks
@@ -462,10 +511,13 @@ def run_healthcheck(db, check_images=True):
     report["incomplete_committees"] = incomplete_committees(db)
     report["skipped_electioneering"] = skipped_electioneering(db)
     report["races_needing_review"] = races_needing_review(all_races)
+    report["untracked_manual_races"] = untracked_manual_races(
+        db, all_races, states_data, significant_company_races
+    )
     report["unreviewed_contributions"] = unreviewed_contributions(db)
     report["candidates_awaiting_results"] = candidates_awaiting_results(all_races)
     try:
-        report["notable_patterns_premises"] = notable_patterns_premises(db)
+        report["notable_patterns_premises"] = notable_patterns_premises(db, all_exp)
     except Exception as error:  # editorial check is best-effort; never break the report
         logging.warning("notable_patterns_premises check failed: %s", error)
         report["notable_patterns_premises"] = None
@@ -570,6 +622,13 @@ def _log_report(report):
         lines.append(f"  - {race_id}")
     if len(needs_review) > 25:
         lines.append(f"  ... and {len(needs_review) - 25} more")
+
+    untracked_manual = report["untracked_manual_races"]
+    lines.append(
+        f"\nHand-created races with no tracked activity: {len(untracked_manual)}"
+    )
+    for race_id in untracked_manual:
+        lines.append(f"  - {race_id}")
 
     contribs = report["unreviewed_contributions"]
     lines.append(

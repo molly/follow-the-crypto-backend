@@ -196,6 +196,11 @@ def save_scraped_races(db_client, state: str, race_data: Dict[str, Any]) -> None
             # If no reviewed races exist yet, initialize with scraped data
             race_group['races'] = scraped_races
 
+        # Preserve the admin UI's marker for races it created, which keeps them
+        # from being pruned before spending is attributed to them
+        if existing_group.get('createdManually'):
+            race_group['createdManually'] = True
+
         # Preserve candidates and spending fields set by summarize_races
         existing_candidates = existing_group.get('candidates', {})
         existing_spending = existing_group.get('spending', {})

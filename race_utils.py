@@ -148,7 +148,7 @@ def _shard_state(doc_id: str) -> str:
     return doc_id
 
 
-def compute_tracked_race_ids(db) -> set:
+def compute_tracked_race_ids(db, states_data=None, significant_company_races=None) -> set:
     """Full race ids that should have a raceDetails entry — the exact inverse of
     the healthcheck's orphaned_spending check.
 
@@ -162,10 +162,14 @@ def compute_tracked_race_ids(db) -> set:
     # process_company_state_spending), so importing it at module load would cycle.
     from recipient_utils import compute_significant_direct_support
 
-    tracked = set(compute_significant_direct_support(db)["race_ids"])
-    states_data = (
-        db.client.collection("expenditures").document("states").get().to_dict() or {}
-    )
+    if significant_company_races is None:
+        significant_company_races = compute_significant_direct_support(db)["race_ids"]
+    tracked = set(significant_company_races)
+    if states_data is None:
+        states_data = (
+            db.client.collection("expenditures").document("states").get().to_dict()
+            or {}
+        )
     for state, data in states_data.items():
         if state in ("US", "None", None):
             continue
@@ -184,7 +188,10 @@ def prune_untracked_races(db) -> None:
     uses to flag missing races. Keying both off one source means a race the orphan
     check expects can never be pruned out from under it (which would otherwise
     oscillate it in and out every run). Races whose candidate data hasn't been
-    populated yet are left alone.
+    populated yet are left alone, as are races created in the admin UI
+    (createdManually): their roster is what attributes a mis-districted
+    expenditure to them, which can't happen if they're pruned first. The
+    healthcheck flags those with no tracked activity instead.
 
     Should run after summarize_races so newly scraped races are present.
     """
@@ -198,6 +205,9 @@ def prune_untracked_races(db) -> None:
         for race_id, race_data in data.items():
             if not race_data.get("candidates", {}):
                 # summarize_races hasn't populated this race yet — leave it
+                kept[race_id] = race_data
+                continue
+            if race_data.get("createdManually"):
                 kept[race_id] = race_data
                 continue
             if f"{state}-{race_id}" in tracked_race_ids:

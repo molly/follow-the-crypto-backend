@@ -1,3 +1,5 @@
+from unidecode import unidecode
+
 from states import SPECIAL_ELECTIONS, CURRENT_CYCLE
 from utils import get_expenditure_race_type, get_sector_keys
 from race_utils import get_all_races
@@ -18,8 +20,12 @@ def sort_and_slice(lst, length=10):
     )[:length]
 
 
+# raceDetails rosters record party as a single letter; expenditures use FEC codes.
+ROSTER_PARTY_TO_FEC = {"D": "DEM", "R": "REP", "I": "IND", "L": "LIB", "G": "GRE"}
+
+
 def build_roster_maps(db):
-    """Three lookups over the raceDetails rosters, built in a single pass.
+    """Four lookups over the raceDetails rosters, built in a single pass.
 
     `cid_to_seat` is candidate_id -> base race id (e.g. 'NY-H-15'). The FEC
     candidate_id is authoritative for which seat a candidate is running for,
@@ -36,11 +42,16 @@ def build_roster_maps(db):
     reads "Ashley Arenholz" and matches no roster entry. An id whose rostered
     names disagree is left out rather than asserting one of them.
 
+    `cid_to_party` is candidate_id -> FEC party code. Efiled 24/48-hour reports
+    often leave candidate_party blank, which drops the row from the by-party
+    totals. As with names, an id whose rostered parties disagree is left out.
+
     `race_by_id` is full race id ('IA-S') -> race data, for resolving the
     sub-race an expenditure belongs to from its date.
     """
     cid_to_seats = {}
     cid_to_names = {}
+    cid_to_parties = {}
     race_by_id = {}
     for state, races in get_all_races(db.client).items():
         for race_id, race_data in races.items():
@@ -60,20 +71,49 @@ def build_roster_maps(db):
                 cid_to_names.setdefault(cid, set()).add(
                     candidate.get("common_name") or name
                 )
+                party = candidate.get("party")
+                # A handful of roster entries store party as a one-item list.
+                if isinstance(party, list) and len(party) == 1:
+                    party = party[0]
+                if party in ROSTER_PARTY_TO_FEC:
+                    cid_to_parties.setdefault(cid, set()).add(ROSTER_PARTY_TO_FEC[party])
     return (
         {cid: seats.pop() for cid, seats in cid_to_seats.items() if len(seats) == 1},
         {cid: names.pop() for cid, names in cid_to_names.items() if len(names) == 1},
+        {cid: parties.pop() for cid, parties in cid_to_parties.items() if len(parties) == 1},
         race_by_id,
     )
 
 
-def resolve_from_roster(expenditure, cid_to_seat, cid_to_name, race_by_id):
-    """Stamp the roster-resolved candidate name and sub-race onto an expenditure.
+def match_roster_id(expenditure, race, db):
+    """The rostered candidate_id for an expenditure filed without one, or None.
 
-    Both are things every consumer needs and none can derive reliably from the
+    Efiled 24/48-hour reports sometimes omit candidate_id entirely (Abundant
+    Future's CA-11 filings name only "Wiener" or "Chan"). Within the race the
+    filing names, the id is taken from the one rostered candidate whose name
+    contains every word of the filer's last name. Whole words, not substrings, so
+    "LEE" can't match "Kathleen". No match or more than one leaves it unset.
+    """
+    last = unidecode(expenditure.get("candidate_last_name") or "").upper().split()
+    if not last:
+        return None
+    matches = set()
+    for name, candidate in (race.get("candidates") or {}).items():
+        cid = candidate.get("candidate_id")
+        if cid and set(last) <= set(unidecode(name).upper().split()):
+            matches.add(db.candidate_aliases.get(cid, cid))
+    return matches.pop() if len(matches) == 1 else None
+
+
+def resolve_from_roster(db, expenditure, cid_to_seat, cid_to_name, cid_to_party, race_by_id):
+    """Stamp roster-resolved candidate fields and sub-race onto an expenditure.
+
+    Every consumer needs these and none can derive them reliably from the
     filer-entered fields, so they're settled once here rather than reassembled
     at each render site:
 
+      - `candidate_id`: filled when the filing omitted it (see match_roster_id).
+      - `candidate_party`: filled from the roster when the filing left it blank.
       - `candidate_common_name`: the name the rest of the site calls this
         candidate (see build_roster_maps).
       - `subrace`: efiled expenditures carry no election_type at all, so
@@ -82,11 +122,22 @@ def resolve_from_roster(expenditure, cid_to_seat, cid_to_name, race_by_id):
         roster passed in. Without this the row keeps a null subrace and matches
         no sub-race view, orphaning the spending.
     """
-    name = cid_to_name.get(expenditure.get("candidate_id"))
+    race = race_by_id.get(get_race_name(expenditure, cid_to_seat))
+    if race and not expenditure.get("candidate_id"):
+        cid = match_roster_id(expenditure, race, db)
+        if cid:
+            expenditure["candidate_id"] = cid
+            # The id may be rostered in a different seat than the district field
+            # named, so re-resolve the race from it.
+            race = race_by_id.get(get_race_name(expenditure, cid_to_seat))
+
+    cid = expenditure.get("candidate_id")
+    name = cid_to_name.get(cid)
     if name:
         expenditure["candidate_common_name"] = name
+    if not expenditure.get("candidate_party") and cid in cid_to_party:
+        expenditure["candidate_party"] = cid_to_party[cid]
 
-    race = race_by_id.get(get_race_name(expenditure, cid_to_seat))
     if race:
         # Returns an existing usable subrace untouched, and only falls through to
         # date matching for the null and "other" cases.
@@ -128,14 +179,16 @@ def get_race_name(expenditure, cid_to_seat=None):
 
 def process_expenditures(db):
     all_expenditures = get_all_expenditures(db)
-    cid_to_seat, cid_to_name, race_by_id = build_roster_maps(db)
+    cid_to_seat, cid_to_name, cid_to_party, race_by_id = build_roster_maps(db)
 
-    # Resolve names and sub-races across every row before anything reads them.
+    # Resolve ids, parties, names and sub-races across every row before anything reads them.
     # Deliberately not folded into the aggregation loop below, which skips
     # zero-amount rows -- those still get rendered in the recent-expenditure
     # lists, so they need resolving too.
     for expenditure in all_expenditures.values():
-        resolve_from_roster(expenditure, cid_to_seat, cid_to_name, race_by_id)
+        resolve_from_roster(
+            db, expenditure, cid_to_seat, cid_to_name, cid_to_party, race_by_id
+        )
     set_all_expenditures(db, all_expenditures)
 
     states = {}
