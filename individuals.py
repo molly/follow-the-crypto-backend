@@ -1,6 +1,14 @@
-from company_spending import parse_search_id, process_contribution
+import logging
+
+import requests
+
+from company_spending import (
+    matches_any_search_term,
+    parse_search_id,
+    process_contribution,
+)
 from fetch_committee_contributions import EARLY_STOP_PATIENCE
-from utils import FEC_fetch
+from utils import FEC_fetch, is_gateway_error
 
 # Committees whose contributions we never store for individuals (WinRed & ActBlue conduits).
 EXCLUDED_COMMITTEE_IDS = ["C00694323", "C00401224"]
@@ -121,11 +129,18 @@ def update_spending_by_individuals(db, session, full=False):
         ids_to_omit = set(db.duplicate_contributions.get(str_id, []))
         fetched = []  # contributions kept this run (everything if full; only-new if incremental)
         fetched_ids = set()
+        individual_new_contributions = []
 
-        def handle_page(results, efiled):
+        def handle_page(results, efiled, required_employers):
             """Process one page; return True if it held no transaction IDs we didn't already have."""
             page_has_new = False
             for contrib in results:
+                # A fallback search dropped the employer filter, so apply it here. Rows it
+                # rejects aren't this person's, so they don't count toward page_has_new.
+                if required_employers and not matches_any_search_term(
+                    contrib, required_employers, fields=("contributor_employer",)
+                ):
+                    continue
                 tid = contrib["transaction_id"]
                 if tid not in old_contribution_ids:
                     page_has_new = True
@@ -145,94 +160,160 @@ def update_spending_by_individuals(db, session, full=False):
                 fetched.append(processed)
                 fetched_ids.add(tid)
                 if tid not in old_contribution_ids:
-                    new_contributions.append(processed)
+                    individual_new_contributions.append(processed)
             return not page_has_new
 
-        # Get regularly filed contributions for individual
-        last_index = None
-        last_contribution_receipt_date = None
-        contribs_count = 0
-        dry_streak = 0
-        search_params = get_individual_search_params(
-            individual, [db.companies[company] for company in associated_companies]
-        )
-        while True:
-            contribution_data = FEC_fetch(
-                session,
-                "committee contributions",
-                "https://api.open.fec.gov/v1/schedules/schedule_a/",
-                params={
-                    **search_params,
-                    "two_year_transaction_period": "2026",
-                    "per_page": "100",
-                    "sort": "-contribution_receipt_date",
-                    "last_index": last_index,
-                    "last_contribution_receipt_date": last_contribution_receipt_date,
-                    "min_amount": 1000
-                },
-            )
-            if not contribution_data:
-                continue
+        def fetch_processed(search_params, required_employers):
+            last_index = None
+            last_contribution_receipt_date = None
+            contribs_count = 0
+            dry_streak = 0
+            while True:
+                contribution_data = FEC_fetch(
+                    session,
+                    "committee contributions",
+                    "https://api.open.fec.gov/v1/schedules/schedule_a/",
+                    params={
+                        **search_params,
+                        "two_year_transaction_period": "2026",
+                        "per_page": "100",
+                        "sort": "-contribution_receipt_date",
+                        "last_index": last_index,
+                        "last_contribution_receipt_date": last_contribution_receipt_date,
+                        "min_amount": 1000
+                    },
+                )
+                if contribution_data is None:
+                    raise RuntimeError(
+                        "FEC returned 404 mid-pagination; not storing a partial result"
+                    )
 
-            contribs_count += contribution_data["pagination"]["per_page"]
-            page_dry = handle_page(contribution_data["results"], efiled=False)
+                contribs_count += contribution_data["pagination"]["per_page"]
+                page_dry = handle_page(
+                    contribution_data["results"], False, required_employers
+                )
 
-            if incremental:
-                dry_streak = dry_streak + 1 if page_dry else 0
-                if dry_streak >= EARLY_STOP_PATIENCE:
+                if incremental:
+                    dry_streak = dry_streak + 1 if page_dry else 0
+                    if dry_streak >= EARLY_STOP_PATIENCE:
+                        break
+
+                # Fetch more pages if they exist, or break
+                if contribs_count >= contribution_data["pagination"]["count"]:
                     break
+                else:
+                    last_index = contribution_data["pagination"]["last_indexes"][
+                        "last_index"
+                    ]
+                    last_contribution_receipt_date = contribution_data["pagination"][
+                        "last_indexes"
+                    ]["last_contribution_receipt_date"]
 
-            # Fetch more pages if they exist, or break
-            if contribs_count >= contribution_data["pagination"]["count"]:
-                break
-            else:
-                last_index = contribution_data["pagination"]["last_indexes"][
-                    "last_index"
-                ]
-                last_contribution_receipt_date = contribution_data["pagination"][
-                    "last_indexes"
-                ]["last_contribution_receipt_date"]
+        def fetch_efiled(search_params, required_employers):
+            page = 1
+            contribs_count = 0
+            dry_streak = 0
+            while True:
+                data = FEC_fetch(
+                    session,
+                    "unprocessed committee contributions",
+                    "https://api.open.fec.gov/v1/schedules/schedule_a/efile",
+                    params={
+                        **search_params,
+                        "min_date": "2025-01-01",
+                        "per_page": 100,
+                        "sort": "-contribution_receipt_date",
+                        "page": page,
+                        "min_amount": 1000
+                    },
+                )
+                if data is None:
+                    raise RuntimeError(
+                        "FEC returned 404 mid-pagination; not storing a partial result"
+                    )
 
-        # Get efiled contributions for individual
-        page = 1
-        contribs_count = 0
-        dry_streak = 0
-        search_params = get_individual_search_params(
-            individual,
-            [db.companies[company] for company in associated_companies],
-            efiled=True,
-        )
-        while True:
-            data = FEC_fetch(
-                session,
-                "unprocessed committee contributions",
-                "https://api.open.fec.gov/v1/schedules/schedule_a/efile",
-                params={
-                    **search_params,
-                    "min_date": "2025-01-01",
-                    "per_page": 100,
-                    "sort": "-contribution_receipt_date",
-                    "page": page,
-                    "min_amount": 1000
-                },
-            )
+                contribs_count += data["pagination"]["per_page"]
+                page_dry = handle_page(data["results"], True, required_employers)
 
-            if not data:
-                continue
+                if incremental:
+                    dry_streak = dry_streak + 1 if page_dry else 0
+                    if dry_streak >= EARLY_STOP_PATIENCE:
+                        break
 
-            contribs_count += data["pagination"]["per_page"]
-            page_dry = handle_page(data["results"], efiled=True)
-
-            if incremental:
-                dry_streak = dry_streak + 1 if page_dry else 0
-                if dry_streak >= EARLY_STOP_PATIENCE:
+                # Fetch more pages if they exist, or break
+                if page >= data["pagination"]["pages"]:
                     break
+                else:
+                    page += 1
 
-            # Fetch more pages if they exist, or break
-            if page >= data["pagination"]["pages"]:
-                break
-            else:
-                page += 1
+        def run_search(fetch, search_params):
+            """Run a search, falling back to a name-only search on a gateway timeout.
+
+            Combining contributor_name and contributor_employer can be too slow for the
+            FEC's gateway (the efile endpoint does this to brian-armstrong + coinbase every
+            time), and a retry fails identically. Name alone is fast, so search on that and
+            filter by employer locally. Returns False if the data couldn't be fetched.
+            """
+            try:
+                fetch(search_params, None)
+                return True
+            except requests.exceptions.HTTPError as e:
+                if not is_gateway_error(e):
+                    raise
+                employers = search_params.get("contributor_employer")
+                if not employers:
+                    logging.error(
+                        "FEC gateway timed out on %s for individual %s, and there's no "
+                        "employer filter to drop.",
+                        fetch.__name__,
+                        str_id,
+                    )
+                    return False
+                logging.warning(
+                    "FEC gateway timed out on %s for individual %s. Retrying by name only "
+                    "and filtering to employers %s locally.",
+                    fetch.__name__,
+                    str_id,
+                    employers,
+                )
+            name_only = {
+                k: v for k, v in search_params.items() if k != "contributor_employer"
+            }
+            required = [employers] if isinstance(employers, str) else list(employers)
+            try:
+                fetch(name_only, required)
+                return True
+            except requests.exceptions.HTTPError as e:
+                if not is_gateway_error(e):
+                    raise
+                logging.error(
+                    "FEC gateway also timed out on the name-only %s for individual %s.",
+                    fetch.__name__,
+                    str_id,
+                )
+                return False
+
+        companies = [db.companies[company] for company in associated_companies]
+        # Regularly filed contributions, then efiled ones
+        complete = run_search(
+            fetch_processed, get_individual_search_params(individual, companies)
+        )
+        complete = (
+            run_search(
+                fetch_efiled,
+                get_individual_search_params(individual, companies, efiled=True),
+            )
+            and complete
+        )
+        if not complete:
+            # Writing now would overwrite a full fetch with partial data, so keep what's
+            # stored and let the next run pick this individual up.
+            logging.error(
+                "Skipping individual %s this run; their stored contributions are unchanged.",
+                str_id,
+            )
+            continue
+        new_contributions.extend(individual_new_contributions)
 
         # Incremental unions the new contributions onto what's stored; full overwrites.
         merged = (old_contributions + fetched) if incremental else fetched

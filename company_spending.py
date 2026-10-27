@@ -108,17 +108,17 @@ def _words(value):
     return set(re.findall(r"[A-Z0-9]+", (value or "").upper()))
 
 
-def matches_any_search_term(contrib, terms):
+def matches_any_search_term(
+    contrib, terms, fields=("contributor_name", "contributor_employer")
+):
     """Check a contribution against search terms the way the FEC's own search would.
 
     The FEC's full-text search requires every word of the term to be present, in any order
     and not necessarily adjacent ("global coinbase" matches "COINBASE GLOBAL, INC."), so
     this reproduces that rather than looking for the term as a literal substring.
     """
-    fields = _words(contrib.get("contributor_name")) | _words(
-        contrib.get("contributor_employer")
-    )
-    return any(_words(term) <= fields for term in terms)
+    words = set().union(*(_words(contrib.get(field)) for field in fields))
+    return any(_words(term) <= words for term in terms)
 
 
 def is_exact_match(contrib, exact_terms):
@@ -283,8 +283,10 @@ def update_spending_by_company(db, session, full=False):
                         "min_amount": 1000,
                     },
                 )
-                if not data:
-                    continue
+                if data is None:
+                    raise RuntimeError(
+                        "FEC returned 404 mid-pagination; not storing a partial result"
+                    )
                 contribs_count += data["pagination"]["per_page"]
                 page_dry = handle_page(
                     data["results"], False, exact_terms, search_param, required_terms
@@ -319,8 +321,10 @@ def update_spending_by_company(db, session, full=False):
                         "min_amount": 1000,
                     },
                 )
-                if not data:
-                    continue
+                if data is None:
+                    raise RuntimeError(
+                        "FEC returned 404 mid-pagination; not storing a partial result"
+                    )
                 contribs_count += data["pagination"]["per_page"]
                 page_dry = handle_page(
                     data["results"], True, exact_terms, search_param, required_terms

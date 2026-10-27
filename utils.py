@@ -189,7 +189,9 @@ def chunk(lst, chunk_size=10):
     giveup=fatal_code,
 )
 def FEC_fetch(session, description, url, params={}):
-    headers = {}
+    # Sent as a header rather than a query param so the key stays out of request URLs,
+    # which requests and backoff echo verbatim into every error and log line.
+    headers = {"X-Api-Key": os.environ["FEC_API_KEY"]}
     if "efile" in url:
         headers["Cache-Control"] = "no-cache"
     full_params = {
@@ -200,7 +202,6 @@ def FEC_fetch(session, description, url, params={}):
         key: list(value) if _is_lazy_iterable(value) else value
         for key, value in params.items()
     }
-    full_params["api_key"] = os.environ["FEC_API_KEY"]
     for attempt in range(1, GATEWAY_MAX_ATTEMPTS + 1):
         # Only throttle requests that will actually reach the FEC; cached responses
         # don't count against the rate limit.
@@ -325,7 +326,13 @@ def match_race_by_date(expenditure, races):
     if not candidate_name:
         return None
 
-    for race in reversed(races):
+    # Walk the calendar earliest-first so the expenditure lands in the next race after it, not in
+    # a later race the candidate also appears in (a primary winner is on the general's roster too).
+    # Sorted here rather than trusting callers, since races are stored oldest-first but some
+    # callers sort them newest-first. Undated races go last so a dated match wins.
+    races = sorted(races, key=lambda race: (race.get("date") is None, race.get("date") or ""))
+
+    for race in races:
         for candidate in race["candidates"]:
             if compare_names(
                 candidate_name,
@@ -340,7 +347,7 @@ def match_race_by_date(expenditure, races):
                     return race_type
 
     # If we couldn't find the race type in the first loop, try again and look for typos
-    for race in reversed(races):
+    for race in races:
         for candidate in race["candidates"]:
             if compare_names(
                 candidate_name,
@@ -376,12 +383,21 @@ def expenditure_seat(expenditure):
 
 def get_expenditure_race_type(expenditure, races=None):
     subrace = expenditure.get("subrace", None)
-    if subrace is not None and subrace != "other":
+    election_type = expenditure.get("election_type", None)
+    # Efiled expenditures (no election_type) and "O" (Other) codes can only be placed by matching
+    # dates against the race calendar, so a stored subrace on them is just an earlier match, not
+    # an FEC code. Re-derive it whenever the calendar is available so a fix to the calendar or
+    # the matcher reaches rows that were already tagged.
+    resolved_by_date = election_type is None or election_type == "O"
+    if (
+        subrace is not None
+        and subrace != "other"
+        and not (resolved_by_date and races is not None)
+    ):
         # "other" is never authoritative: no race has a sub-race of that type, so an expenditure
         # left tagged that way is invisible on the race page. Fall through and try to resolve it.
         return subrace
 
-    election_type = expenditure.get("election_type", None)
     election_type_full = expenditure.get("election_type_full", None)
     if election_type_full is not None:
         election_type_full = election_type_full.lower()

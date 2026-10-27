@@ -61,8 +61,10 @@ def update_committee_expenditures(db, session):
                 },
             )
 
-            if not data:
-                continue
+            if data is None:
+                raise RuntimeError(
+                    "FEC returned 404 mid-pagination; not storing a partial result"
+                )
 
             exp_count += data["pagination"]["per_page"]
 
@@ -111,8 +113,10 @@ def update_committee_expenditures(db, session):
                 },
             )
 
-            if not data:
-                continue
+            if data is None:
+                raise RuntimeError(
+                    "FEC returned 404 mid-pagination; not storing a partial result"
+                )
 
             results = data["results"]
             for exp in results:

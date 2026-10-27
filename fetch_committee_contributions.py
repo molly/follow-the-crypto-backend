@@ -308,8 +308,10 @@ def update_committee_contributions(db, session, full=False):
                 },
             )
 
-            if not data:
-                continue
+            if data is None:
+                raise RuntimeError(
+                    "FEC returned 404 mid-pagination; not storing a partial result"
+                )
 
             contribs_count += data["pagination"]["per_page"]
             page_dry = handle_page(data["results"], efiled=False)
@@ -346,8 +348,10 @@ def update_committee_contributions(db, session, full=False):
                 },
             )
 
-            if not data:
-                continue
+            if data is None:
+                raise RuntimeError(
+                    "FEC returned 404 mid-pagination; not storing a partial result"
+                )
 
             contribs_count += data["pagination"]["per_page"]
             page_dry = handle_page(data["results"], efiled=True)

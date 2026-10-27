@@ -117,8 +117,10 @@ def fetch_committee_large_contributions(session, committee_id, committee_name, m
                 "last_contribution_receipt_amount": last_amount,
             },
         )
-        if not data:
-            continue
+        if data is None:
+            raise RuntimeError(
+                "FEC returned 404 mid-pagination; not storing a partial result"
+            )
 
         for c in data["results"]:
             tid = c.get("transaction_id")

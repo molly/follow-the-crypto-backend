@@ -121,15 +121,23 @@ def resolve_from_roster(db, expenditure, cid_to_seat, cid_to_name, cid_to_party,
         expenditure's date against the race's sub-race dates -- which needs the
         roster passed in. Without this the row keeps a null subrace and matches
         no sub-race view, orphaning the spending.
+      - `race_id`: the race key this expenditure is filed under (see
+        get_race_name). The "-special" suffix depends on SPECIAL_ELECTIONS, not
+        just election_type: filers code OH-S spending as "G" even though the
+        seat only holds a special this cycle.
     """
-    race = race_by_id.get(get_race_name(expenditure, cid_to_seat))
+    race_id = get_race_name(expenditure, cid_to_seat)
+    race = race_by_id.get(race_id)
     if race and not expenditure.get("candidate_id"):
         cid = match_roster_id(expenditure, race, db)
         if cid:
             expenditure["candidate_id"] = cid
             # The id may be rostered in a different seat than the district field
             # named, so re-resolve the race from it.
-            race = race_by_id.get(get_race_name(expenditure, cid_to_seat))
+            race_id = get_race_name(expenditure, cid_to_seat)
+            race = race_by_id.get(race_id)
+    if expenditure.get("candidate_office_state"):
+        expenditure["race_id"] = race_id
 
     cid = expenditure.get("candidate_id")
     name = cid_to_name.get(cid)
@@ -139,8 +147,8 @@ def resolve_from_roster(db, expenditure, cid_to_seat, cid_to_name, cid_to_party,
         expenditure["candidate_party"] = cid_to_party[cid]
 
     if race:
-        # Returns an existing usable subrace untouched, and only falls through to
-        # date matching for the null and "other" cases.
+        # Keeps a subrace taken from an FEC election code, and re-matches by date
+        # for efiled and "O" rows, whose stored subrace is only an earlier match.
         subrace = get_expenditure_race_type(expenditure, race.get("races") or [])
         if subrace:
             expenditure["subrace"] = subrace

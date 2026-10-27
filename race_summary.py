@@ -485,32 +485,15 @@ def summarize_races(db, session):
                 # Add the expenditure's sub-race to the candidate's list of expenditure_races.
                 stored_subrace = expenditure.get("subrace", None)
 
-                # Sort races descending by date so get_expenditure_race_type() finds the nearest
-                # future race correctly regardless of how races were manually ordered in Firestore.
-                sorted_races = sorted(
-                    race_data.get("races", []),
-                    key=lambda r: r.get("date") or "",
-                    reverse=True,
-                )
-
-                if expenditure.get("election_type"):
-                    # election_type is available: recompute deterministically from the FEC code.
-                    # The races list is only consulted for "O" (Other) codes, which no race can
-                    # match and which therefore have to be resolved by date.
-                    subrace = get_expenditure_race_type(expenditure, sorted_races)
-                    if not subrace:
-                        subrace = stored_subrace
-                    elif subrace != stored_subrace:
-                        update_expenditure_field(db, expenditure_id, "subrace", subrace)
-                else:
-                    # Efiled expenditure: no election_type, trust the stored subrace.
+                # Resolved from the FEC election code where there is one, and by matching dates
+                # against the race calendar for efiled and "O" (Other) expenditures, which is
+                # re-run every time so corrections reach rows that were already tagged. Persist
+                # any change so the stored row agrees with the race summary.
+                subrace = get_expenditure_race_type(expenditure, race_data.get("races", []))
+                if not subrace:
                     subrace = stored_subrace
-                    if subrace is None:
-                        subrace = get_expenditure_race_type(expenditure, sorted_races)
-                        if subrace:
-                            update_expenditure_field(
-                                db, expenditure_id, "subrace", subrace
-                            )
+                elif subrace != stored_subrace:
+                    update_expenditure_field(db, expenditure_id, "subrace", subrace)
                 if subrace:
                     candidates_data[candidate_key]["expenditure_races"].add(subrace)
 

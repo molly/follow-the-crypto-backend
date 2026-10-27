@@ -38,8 +38,10 @@ def _fetch_disbursements_for_line(session, committee_id, line_number, disburseme
                 "per_page": 100,
             },
         )
-        if not data:
-            continue
+        if data is None:
+            raise RuntimeError(
+                "FEC returned 404 mid-pagination; not storing a partial result"
+            )
         disbursements_count += len(data["results"])
         for disbursement in data["results"]:
             if not disbursement.get("recipient_committee_id"):
