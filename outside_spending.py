@@ -6,6 +6,9 @@ from expenditure_utils import get_all_expenditures
 SCHEDULE_E_FIELDS = [
     "expenditure_amount",
     "expenditure_date",
+    # E-filed (24/48-hour) reports usually have no expenditure_date, only the
+    # date the communication was disseminated.
+    "dissemination_date",
     "expenditure_description",
     "support_oppose_indicator",
     "candidate_id",

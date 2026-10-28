@@ -74,6 +74,38 @@ python -m commands.list_committees
 python -m commands.list_committees --verbose
 ```
 
+## Race Competitiveness Commands
+
+For the /analysis/battlegrounds page. Writes `raceCompetitiveness.review.json` in the frontend repo; nothing goes to Firestore.
+
+### Generate Review File
+```bash
+python -m commands.race_competitiveness
+```
+
+Lists every primary, same-party general, and general without a Cook rating that tracked PACs spent in. Re-running keeps existing marks.
+
+### Review Contests
+```bash
+python -m commands.review_competitiveness
+python -m commands.review_competitiveness --state NY,CA
+python -m commands.review_competitiveness --all
+```
+
+Walks unreviewed contests state by state and saves each answer as you go. Options: `--state` (comma-separated), `--all` (include already-marked contests)
+
+## Ad Transcripts
+
+For newsletter research. Transcribes the longest cut of each grouped video ad with Whisper and writes the results to `cache/ad_transcripts/` (one JSON per ad plus a combined `transcripts.md`); nothing goes to Firestore.
+
+```bash
+python -m commands.transcribe_ads
+python -m commands.transcribe_ads --race PA-H-07,IL-S
+python -m commands.transcribe_ads --dry-run
+```
+
+Skips ads that already have a transcript, so re-running only picks up new ones. Options: `--race` (comma-separated), `--model` (default `large-v3`), `--out`, `--force`, `--dry-run`. Needs `torch` and `openai-whisper`, which aren't in the project dependencies since it's meant to run on a GPU machine.
+
 ## Field Reference
 
 **Individual**: `id`, `name`, `nameSearch`, `zip`, `city`, `company` (array), `employerSearch` (array), `title`, `photoCredit`

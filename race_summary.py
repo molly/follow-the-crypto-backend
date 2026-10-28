@@ -25,6 +25,44 @@ def trim_name(name):
     return unidecode(last_name)
 
 
+NAME_SUFFIXES = {"JR", "SR", "II", "III", "IV", "V", "IX"}
+
+
+def middle_initial(tokens):
+    """First letter of the first middle-name token, ignoring suffixes, or None."""
+    for token in tokens:
+        token = token.strip(".,").upper()
+        if token and token not in NAME_SUFFIXES:
+            return token[0]
+    return None
+
+
+def fec_match_score(fec_name, common_name):
+    """How well an FEC "LAST, FIRST MIDDLE" name agrees with a roster name.
+
+    Only used to rank FEC results that already share the candidate's surname.
+    0: first name differs. 2: first name agrees. The middle initial then adds 1
+    when both names have one and they agree, or takes 1 away when they disagree,
+    so "SULLIVAN, DANIEL S" outranks "SULLIVAN, DANIEL J" for "Daniel S. Sullivan".
+    """
+    split_name = fec_name.split(", ")
+    given = split_name[1].split(" ") if len(split_name) > 1 else []
+    first_name = given[0] if given else ""
+    if not first_name or not compare_names(first_name, common_name):
+        return 0
+    score = 2
+    fec_middle = middle_initial(given[1:])
+    # Drop suffixes, then the first and last tokens of the roster name, to leave
+    # its middle
+    common_tokens = unidecode(common_name).split()
+    while common_tokens and common_tokens[-1].strip(".,").upper() in NAME_SUFFIXES:
+        common_tokens.pop()
+    common_middle = middle_initial(common_tokens[1:-1])
+    if fec_middle and common_middle:
+        score += 1 if fec_middle == common_middle else -1
+    return score
+
+
 def find_candidate_in_other_district(session, session_params, common_name):
     """Look a House candidate up statewide, ignoring the district filter.
 
@@ -56,6 +94,66 @@ def find_candidate_in_other_district(session, session_params, common_name):
     if len(matches) != 1:
         return None
     return matches[0]
+
+
+def add_raised_reports(session, candidates_data, candidate_ids, fec_cycle):
+    """Record each candidate's receipts by FEC filing period, from their
+    principal campaign committees' current (unamended) reports, as
+    raised_reports: [{date: coverage_end_date, receipts}, ...]. (A list of maps
+    because Firestore can't store nested arrays.) The frontend steps
+    raised_total back through these to show fundraising as of any date."""
+    if not candidate_ids:
+        return
+    search = FEC_fetch(
+        session,
+        "candidate committees",
+        "https://api.open.fec.gov/v1/candidates/search/",
+        {"candidate_id": candidate_ids, "per_page": 50},
+    )
+    committee_to_candidate = {}
+    for result in (search or {}).get("results", []):
+        for committee in result.get("principal_committees") or []:
+            committee_to_candidate[committee["committee_id"]] = result["candidate_id"]
+    if not committee_to_candidate:
+        return
+
+    reports_by_candidate = {}
+    page = 1
+    while True:
+        reports = FEC_fetch(
+            session,
+            "candidate committee reports",
+            "https://api.open.fec.gov/v1/reports/house-senate/",
+            {
+                "committee_id": list(committee_to_candidate),
+                "cycle": fec_cycle,
+                "is_amended": False,
+                "per_page": 100,
+                "page": page,
+            },
+        )
+        if not reports:
+            break
+        for report in reports["results"]:
+            candidate_id = committee_to_candidate.get(report["committee_id"])
+            end_date = (report.get("coverage_end_date") or "")[:10]
+            if candidate_id and end_date:
+                reports_by_candidate.setdefault(candidate_id, []).append(
+                    {
+                        "date": end_date,
+                        "receipts": report.get("total_receipts_period") or 0,
+                    }
+                )
+        if page >= reports["pagination"]["pages"]:
+            break
+        page += 1
+
+    for candidate in candidates_data.values():
+        candidate_id = candidate.get("candidate_id")
+        if candidate_id in reports_by_candidate:
+            candidate["raised_reports"] = sorted(
+                reports_by_candidate[candidate_id], key=lambda r: r["date"]
+            )
 
 
 def summarize_races(db, session):
@@ -185,14 +283,16 @@ def summarize_races(db, session):
 
             # Map FEC candidate names to formatted candidate names (which are being used as keys)
             names = {}
-            # Per matched candidate: whether the FEC result we assigned agreed on
-            # the first name, and which FEC name it was. The surname search returns
-            # everyone of that surname who ever filed in the district, so when a
-            # candidate has a single same-surname match in our set we must still
-            # prefer the first-name match — otherwise a different person sharing the
-            # surname (e.g. Jimih Jones, returned alongside the Eric Jones actually
-            # running in CA-04) clobbers the correct match on last-write-wins.
-            matched_first_name = {}
+            # Per matched candidate: how well the FEC result we assigned agreed
+            # with the roster name (fec_match_score), and which FEC name it was.
+            # The surname search returns everyone of that surname who ever filed
+            # in the district, so when a candidate has a single same-surname match
+            # in our set we must still prefer the closest name — otherwise a
+            # different person sharing the surname (e.g. Jimih Jones, returned
+            # alongside the Eric Jones actually running in CA-04, or Daniel J.
+            # Sullivan Jr. alongside Daniel S. Sullivan in AK-S) clobbers the
+            # correct match on last-write-wins.
+            match_scores = {}
             assigned_fec_name = {}
             # Add relevant FEC data to candidate data
             for FEC_candidate_data in FEC_candidates_data["results"]:
@@ -226,17 +326,16 @@ def summarize_races(db, session):
                     continue
 
                 # When a candidate has a single same-surname match, the surname
-                # check above can't tell two people apart, so verify the first name
-                # before letting this result overwrite an existing one. A result
-                # whose first name matches always wins over one that doesn't; among
-                # equally-(un)matched results, last-write-wins as before.
-                first_name_matches = bool(
-                    first_name and compare_names(first_name, candidate_race_name)
+                # check above can't tell two people apart, so score the rest of
+                # the name before letting this result overwrite an existing one. A
+                # better-scoring result always wins; among equally scored results,
+                # last-write-wins as before.
+                match_score = fec_match_score(
+                    FEC_candidate_data["name"], candidate_race_name
                 )
                 if (
                     candidates_data[candidate_race_name].get("candidate_id") is not None
-                    and matched_first_name.get(candidate_race_name)
-                    and not first_name_matches
+                    and match_score < match_scores.get(candidate_race_name, 0)
                 ):
                     continue
                 # If this result supersedes a prior, worse match, drop the prior
@@ -244,7 +343,7 @@ def summarize_races(db, session):
                 prev_fec_name = assigned_fec_name.get(candidate_race_name)
                 if prev_fec_name is not None and prev_fec_name in names:
                     del names[prev_fec_name]
-                matched_first_name[candidate_race_name] = first_name_matches
+                match_scores[candidate_race_name] = match_score
                 assigned_fec_name[candidate_race_name] = FEC_candidate_data["name"]
 
                 # Map FEC name to common name
@@ -306,7 +405,7 @@ def summarize_races(db, session):
                         ] = FEC_candidate_data["candidate_id"]
 
                         candidates_data[entry["common_name"]]["party"] = (
-                            FEC_candidate_data["party"][0],
+                            FEC_candidate_data["party"][0]
                         )
 
                         candidates_data[entry["common_name"]][
@@ -650,6 +749,8 @@ def summarize_races(db, session):
                 candidates_data[candidate_key]["spent_total"] = total_result[
                     "disbursements"
                 ]
+
+            add_raised_reports(session, candidates_data, candidate_ids, fec_cycle)
 
             updated_data = {
                 db.client.field_path(race_id, "candidates"): candidates_data,
